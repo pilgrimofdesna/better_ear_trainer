@@ -40,7 +40,7 @@ export function patternName(key: string): string {
 
 function Trend({ points }: { points: SessionPoint[] }) {
   const pts = points.slice(-30);
-  const W = 520, H = 180, L = 30, R = 8, T = 10, B = 22;
+  const W = 360, H = 170, L = 30, R = 8, T = 10, B = 22;
   const x = (i: number) => L + (pts.length <= 1 ? (W - L - R) / 2 : (i * (W - L - R)) / (pts.length - 1));
   const y = (v: number) => T + (1 - v) * (H - T - B);
   const line = (get: (p: SessionPoint) => Rate, color: string) => {
@@ -68,7 +68,7 @@ function Trend({ points }: { points: SessionPoint[] }) {
           <text x={L - 4} y={y(v) + 3} text-anchor="end">{`${v * 100}`}</text>
         </g>
       ))}
-      <text x={L} y={H - 6}>오래된 세션</text>
+      <text x={L} y={H - 6}>처음</text>
       <text x={W - R} y={H - 6} text-anchor="end">최근</text>
       {line((p) => p.random, C.random)}
       {line((p) => p.weakRandom, C.weakR)}
@@ -101,6 +101,7 @@ export function Stats() {
   const [trials, setTrials] = useState<TrialRec[] | null>(null);
   const [ex, setEx] = useState<Exercise>('single');
   const [clean, setClean] = useState(false);
+  const [byChunk, setByChunk] = useState(false);
   useEffect(() => {
     allTrials().then(setTrials).catch(() => setTrials([]));
   }, []);
@@ -161,7 +162,15 @@ export function Stats() {
               <span><i style={{ background: C.weakR }} />약점 · 랜덤에서</span>
               <span><i style={{ background: C.weakB }} />약점 · 편향 출제</span>
             </div>
-            <Trend points={a.sessions} />
+            <div class="row">
+              <button class={`chip ${!byChunk ? 'on' : ''}`} onClick={() => setByChunk(false)}>
+                세션별
+              </button>
+              <button class={`chip ${byChunk ? 'on' : ''}`} onClick={() => setByChunk(true)}>
+                20문제씩
+              </button>
+            </div>
+            <Trend points={byChunk ? a.chunks : a.sessions} />
             {a.weak.length > 0 && (
               <>
                 <h3>지금 약한 패턴</h3>

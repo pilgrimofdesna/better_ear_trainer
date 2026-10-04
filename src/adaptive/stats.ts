@@ -80,18 +80,22 @@ export function analyze(trials: TrialRec[], opts: { cleanOnly?: boolean } = {}) 
   const weak = model.weakest('', 3, 6);
   const weakKeys = weak.map((w) => w.key);
 
-  // ---- per session trend ----
-  const bySession = new Map<number, SessionPoint>();
-  for (const t of all) {
-    if (!bySession.has(t.sessionId))
-      bySession.set(t.sessionId, { sessionId: t.sessionId, start: t.tPresented, random: rate(), weakRandom: rate(), weakBiased: rate() });
-    if (!use(t)) continue;
-    const p = bySession.get(t.sessionId)!;
-    if (t.selection === 'random') add(p.random, units(t));
-    const hits = weakKeys.flatMap((k) => patternHits(t, k));
-    add(t.selection === 'random' ? p.weakRandom : p.weakBiased, hits);
-  }
-  const sessions = [...bySession.values()].sort((a, b) => a.start - b.start);
+  // ---- trend, per session and per chunk of 20 questions ----
+  const trend = (groupOf: (t: TrialRec, i: number) => number) => {
+    const groups = new Map<number, SessionPoint>();
+    all.forEach((t, i) => {
+      const g = groupOf(t, i);
+      if (!groups.has(g)) groups.set(g, { sessionId: g, start: t.tPresented, random: rate(), weakRandom: rate(), weakBiased: rate() });
+      if (!use(t)) return;
+      const p = groups.get(g)!;
+      if (t.selection === 'random') add(p.random, units(t));
+      const hits = weakKeys.flatMap((k) => patternHits(t, k));
+      add(t.selection === 'random' ? p.weakRandom : p.weakBiased, hits);
+    });
+    return [...groups.values()].sort((a, b) => a.start - b.start);
+  };
+  const sessions = trend((t) => t.sessionId);
+  const chunks = trend((_, i) => Math.floor(i / 20));
 
   // ---- overall ----
   const overall = { random: rate(), biased: rate(), clean: rate(), first: rate() };
@@ -196,6 +200,7 @@ export function analyze(trials: TrialRec[], opts: { cleanOnly?: boolean } = {}) 
   return {
     count: all.length,
     sessions,
+    chunks,
     overall,
     degrees,
     confusion,

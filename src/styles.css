@@ -124,7 +124,7 @@ button:disabled { opacity: 0.4; }
 }
 .orb.listening { animation: pulse 1.4s ease-in-out infinite; }
 .orb.good { color: var(--gold); border-color: var(--gold); box-shadow: 0 0 40px var(--gold-glow), inset 0 0 30px rgba(246, 215, 122, 0.25); }
-.orb.bad { color: var(--bad); border-color: rgba(255, 143, 163, 0.6); }
+.orb.bad { color: var(--gold); border-color: rgba(255, 143, 163, 0.6); }
 @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 rgba(143, 199, 255, 0); } 50% { box-shadow: 0 0 34px rgba(143, 199, 255, 0.35); } }
 @media (prefers-reduced-motion: reduce) { .orb.listening { animation: none; } }
 
@@ -179,7 +179,7 @@ button:disabled { opacity: 0.4; }
 .tile .k { font-size: 12px; color: var(--muted); }
 .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
-svg text { fill: var(--muted); font-size: 10px; }
+svg text { fill: var(--muted); font-size: 11px; }
 table.grid { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
 table.grid th, table.grid td { padding: 4px 3px; text-align: center; border-bottom: 1px solid var(--line); }
 table.grid th { color: var(--muted); font-weight: 600; }
