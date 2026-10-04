@@ -78,10 +78,18 @@ function cadence(mode: Mode): ContextPhrase {
     next = cands[0];
     voiced.unshift(next);
   }
+  let bass = 0;
   prog.forEach((name, i) => {
-    const root = CHORDS[mode][name][0];
-    let bass = (((root % 12) + 12) % 12) - 12;
-    if (bass > -5) bass -= 12;
+    const root = ((CHORDS[mode][name][0] % 12) + 12) % 12;
+    if (i === 0) bass = root - 12 > -5 ? root - 24 : root - 12;
+    else {
+      // the octave in [-17, -5] nearest the previous bass note, so a stepwise bass keeps its
+      // direction (i–VII–VI–V–i walks down 1–♭7–♭6–5 instead of leaping up a 7th to V)
+      const prev = bass;
+      bass = [root - 24, root - 12]
+        .filter((b) => b >= -17 && b <= -5)
+        .reduce((a, b) => (Math.abs(b - prev) < Math.abs(a - prev) ? b : a));
+    }
     const t = i * beat;
     const last = i === prog.length - 1;
     const dur = last ? beat * 2 : beat * 0.95;
@@ -105,9 +113,10 @@ function drone(): ContextPhrase {
     kind: 'drone',
     label: '토닉 드론',
     events: [
-      { semi: octave - 12, t: 0, dur: len, vel: 0.4, sustain: true },
-      { semi: octave, t: 0, dur: len, vel: 0.35, sustain: true },
+      // tonic, fifth and octave; nothing below the tonic octave (inaudible on a phone speaker)
+      { semi: octave, t: 0, dur: len, vel: 0.4, sustain: true },
       { semi: octave + 7, t: 0.15, dur: len - 0.15, vel: 0.25, sustain: true },
+      { semi: octave + 12, t: 0, dur: len, vel: 0.28, sustain: true },
     ],
     length: len + 0.3,
   };

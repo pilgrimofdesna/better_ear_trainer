@@ -45,12 +45,16 @@ export function setVolume(v: number) {
   master.gain.value = v;
 }
 
-/** Wall-clock (epoch ms) of an AudioContext time, for logging. */
+/**
+ * Wall-clock (epoch ms, the Date.now() clock) of an AudioContext time, for logging.
+ * The performance clock stops while an Android phone sleeps, so it is mapped to
+ * Date.now() with an offset measured now rather than with performance.timeOrigin.
+ */
 export function wallClock(audioTime: number): number {
   const c = audio();
   const ts = c.getOutputTimestamp?.();
   if (ts && ts.contextTime !== undefined && ts.performanceTime) {
-    return performance.timeOrigin + ts.performanceTime + (audioTime - ts.contextTime) * 1000;
+    return Date.now() - performance.now() + ts.performanceTime + (audioTime - ts.contextTime) * 1000;
   }
   return Date.now() + (audioTime - c.currentTime) * 1000;
 }

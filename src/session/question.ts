@@ -149,3 +149,24 @@ export function buildQuestion(a: BuildArgs): Question {
 }
 
 export const firstPc = (q: Question) => pc(q.target[0]);
+
+/** Target timing across the playbacks of one question (epoch ms). */
+export interface Presentation {
+  tPlays: number[]; // target onset of every playback whose target was reached
+  tAudioStart: number; // first presentation: latencies are measured from here
+  tAudioEnd: number;
+}
+
+export const noPresentation = (): Presentation => ({ tPlays: [], tAudioStart: 0, tAudioEnd: 0 });
+
+/**
+ * Log a new playback whose target sounds from `start` to `end`, scheduled at `now`.
+ * A previous playback cut off before its target began never presented it, so its onset
+ * is dropped. Only the first presentation sets tAudioStart/tAudioEnd; replays are only logged.
+ */
+export function notePlayback(p: Presentation, now: number, start: number, end: number): Presentation {
+  const tPlays = p.tPlays.filter((t) => t <= now);
+  const first = tPlays.length === 0;
+  tPlays.push(start);
+  return first ? { tPlays, tAudioStart: start, tAudioEnd: end } : { ...p, tPlays };
+}

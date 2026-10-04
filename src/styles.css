@@ -27,7 +27,8 @@ html, body {
   overscroll-behavior: none;
 }
 
-#sky { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+/* sized in px by sky.ts: as tall as the tallest viewport, so the URL bar never stretches it */
+#sky { position: fixed; top: 0; left: 0; z-index: 0; pointer-events: none; }
 #app { position: relative; z-index: 1; }
 
 .page {

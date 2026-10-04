@@ -3,8 +3,9 @@
 // Blocks of 4 questions: two random in a row and two biased in a row, order RRBB or
 // BBRR chosen per block. Assuming the user is influenced only by the previous
 // question, the second question of each pair follows a same-mode question, so it is a
-// clean measurement of that mode ("pairPos 1").
-import type { Selection, TrialRec } from '../data/db';
+// clean measurement of that mode ("pairPos 1"). Two blocks can also meet as RR|RR or
+// BB|BB, so the stats classify trials by the trial that actually came before them.
+import type { Selection, SessionRec, TrialRec } from '../data/db';
 import { pc } from '../music/theory';
 
 export interface Slot {
@@ -26,18 +27,52 @@ export class BlockSchedule {
   }
 }
 
-// ---- response latency ----
+// ---- scoring ----
 
-/** Time from a note sounding to its answer: onset-based for single notes, per note for dictation. */
-export function noteLatencies(t: TrialRec): number[] {
-  if (t.exercise === 'single') return [t.tSubmit - t.tAudioStart];
-  return t.tInputs.map((ti, i) => ti - (t.tAudioStart + i * t.noteDur * 1000));
+/** False for a note whose answer was shown as a hint: it is entered but never scored. */
+export const scored = (t: Pick<TrialRec, 'hinted'>, i: number) => !t.hinted?.includes(i);
+
+/** Scored outcomes of a trial: the trial itself for single notes, each unhinted note for dictation. */
+export const units = (t: TrialRec): boolean[] =>
+  t.exercise === 'single' ? (scored(t, 0) ? [t.allCorrect] : []) : t.correct.filter((_, i) => scored(t, i));
+
+/** Every scored answer right (a mistyped hint note doesn't count). */
+export const trialOk = (t: TrialRec) => units(t).every(Boolean);
+
+/** Old dictation records predate `hinted`; recover it from the session's settings snapshot. */
+export function withHints(trials: TrialRec[], sessions: SessionRec[]): TrialRec[] {
+  const hintOn = new Set(
+    sessions
+      .filter((s) => s.exercise === 'dictation' && (s.settings as { dictation?: { firstHint?: boolean } } | null)?.dictation?.firstHint)
+      .map((s) => s.id),
+  );
+  return trials.map((t) => (t.exercise === 'dictation' && !t.hinted && hintOn.has(t.sessionId) ? { ...t, hinted: [0] } : t));
 }
 
+// ---- response latency ----
+
+/**
+ * Time from each note first sounding to its answer, aligned with `target` (one value for
+ * single notes). Measured from the first presentation, so time spent on replays counts as
+ * deliberation. NaN where it can't be measured: hinted notes, inputs made before the note
+ * sounded, and old records (no tPlays) whose onset a replay overwrote.
+ */
+export function noteLatencies(t: TrialRec): number[] {
+  const onsetKnown = t.tPlays !== undefined || t.replays + t.contextReplays === 0;
+  const raw =
+    t.exercise === 'single'
+      ? [t.tSubmit - t.tAudioStart]
+      : t.target.map((_, i) => (t.tInputs[i] ?? NaN) - (t.tAudioStart + i * t.noteDur * 1000));
+  return raw.map((x, i) => (onsetKnown && scored(t, i) && x >= 0 ? x : NaN));
+}
+
+/** Mean of the measurable note latencies, NaN if there are none. */
 export const latency = (t: TrialRec) => {
-  const xs = noteLatencies(t);
-  return xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
+  const xs = noteLatencies(t).filter(Number.isFinite);
+  return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN;
 };
+
+const replayed = (t: TrialRec) => t.replays + t.contextReplays > 0;
 
 // ---- patterns ----
 
@@ -53,28 +88,63 @@ export function singlePatterns(t: Pick<TrialRec, 'target' | 'registerOctave' | '
   return keys;
 }
 
+/** Dictation keys: degree, two-note interval, and degree at a position (`pos:p@i`). */
 export function dictationPatterns(target: number[]): string[] {
   const keys = new Set<string>();
   target.forEach((s, i) => {
     keys.add(`deg:${pc(s)}`);
+    keys.add(`pos:${pc(s)}@${i}`);
     if (i > 0) keys.add(`int:${pc(target[i - 1])}>${pc(s)}`);
   });
   return [...keys];
 }
 
-/** Error weight for each pattern of a finished trial. Slow correct answers count a little. */
+/**
+ * Pattern keys a trial exercises. Dictation keys are recomputed from the target so old
+ * records get newer pattern families; single-note `trans:` needs the stored list.
+ */
+export const trialPatterns = (t: TrialRec) => (t.exercise === 'dictation' ? dictationPatterns(t.target) : t.patterns);
+
+/** Indices of the scored notes that belong to a pattern key (an interval's two notes). */
+export function patternNotes(t: TrialRec, key: string): number[] {
+  if (t.exercise === 'single') return scored(t, 0) && t.patterns.includes(key) ? [0] : [];
+  const [kind, body] = key.split(':');
+  const notes = new Set<number>();
+  const pcs = t.target.map(pc);
+  if (kind === 'deg') pcs.forEach((p, i) => p === +body && notes.add(i));
+  if (kind === 'pos') {
+    const [p, i] = body.split('@').map(Number);
+    if (pcs[i] === p) notes.add(i);
+  }
+  if (kind === 'int') {
+    const [a, b] = body.split('>').map(Number);
+    for (let i = 1; i < pcs.length; i++) if (pcs[i - 1] === a && pcs[i] === b) notes.add(i - 1).add(i);
+  }
+  return [...notes].filter((i) => scored(t, i)).sort((a, b) => a - b);
+}
+
+/**
+ * Error weight for each pattern of a finished trial. Correct answers that were slow or
+ * needed a replay count a little. Hinted notes are left out; an interval that starts
+ * on a hinted note is scored on its other note.
+ */
 export function outcomes(t: TrialRec, slowMs: number): Outcome[] {
-  const slow = latency(t) > slowMs ? 0.3 : 0;
+  const shaky = latency(t) > slowMs || replayed(t) ? 0.3 : 0;
   if (t.exercise === 'single') {
-    const err = t.allCorrect ? slow : 1;
+    if (!scored(t, 0)) return [];
+    const err = t.allCorrect ? shaky : 1;
     return t.patterns.map((key) => ({ key, err }));
   }
   const out: Outcome[] = [];
   t.target.forEach((s, i) => {
-    out.push({ key: `deg:${pc(s)}`, err: t.correct[i] ? slow : 1 });
+    const p = pc(s);
+    if (scored(t, i)) {
+      const err = t.correct[i] ? shaky : 1;
+      out.push({ key: `deg:${p}`, err }, { key: `pos:${p}@${i}`, err });
+    }
     if (i > 0) {
-      const ok = t.correct[i] && t.correct[i - 1];
-      out.push({ key: `int:${pc(t.target[i - 1])}>${pc(s)}`, err: ok ? slow : 1 });
+      const notes = [i - 1, i].filter((j) => scored(t, j));
+      if (notes.length) out.push({ key: `int:${pc(t.target[i - 1])}>${p}`, err: notes.every((j) => t.correct[j]) ? shaky : 1 });
     }
   });
   return out;
@@ -124,7 +194,7 @@ export class WeaknessModel {
     for (const t of history) this.add(t);
   }
 
-  /** Answers slower than twice the median correct latency count as shaky. */
+  /** Answers slower than twice the median correct (unreplayed) latency count as shaky. */
   slowThreshold(): number {
     if (this.rts.length < 10) return Infinity;
     const s = [...this.rts].sort((a, b) => a - b);
@@ -134,8 +204,9 @@ export class WeaknessModel {
   add(t: TrialRec) {
     const slow = this.slowThreshold();
     this.n++;
-    if (t.allCorrect) {
-      this.rts.push(latency(t));
+    const lat = latency(t);
+    if (trialOk(t) && !replayed(t) && Number.isFinite(lat)) {
+      this.rts.push(lat);
       if (this.rts.length > 300) this.rts.shift();
     }
     for (const o of outcomes(t, slow)) {
@@ -185,12 +256,27 @@ export class WeaknessModel {
     return best;
   }
 
-  /** Keys ranked by posterior error, only those with some evidence. */
+  /**
+   * Keys with some evidence, ranked by a cautious error estimate (posterior mean minus two
+   * sd) so that sparse keys with a few unlucky misses don't crowd out well-measured
+   * weaknesses. `rate` is the posterior mean.
+   */
   weakest(prefix = '', min = 3, limit = 8): { key: string; rate: number; n: number }[] {
-    return [...this.stats.keys()]
-      .filter((k) => k.startsWith(prefix) && this.evidence(k) >= min)
-      .map((key) => ({ key, rate: this.errorRate(key), n: this.evidence(key) }))
-      .sort((a, b) => b.rate - a.rate)
-      .slice(0, limit);
+    const out: { key: string; rate: number; n: number; score: number }[] = [];
+    for (const key of this.stats.keys()) {
+      if (!key.startsWith(prefix)) continue;
+      const s = this.decayed(key);
+      const n = s.err + s.ok;
+      if (n < min) continue;
+      const a = 1 + s.err;
+      const b = 2 + s.ok;
+      const rate = a / (a + b);
+      const sd = Math.sqrt((a * b) / ((a + b) ** 2 * (a + b + 1)));
+      out.push({ key, rate, n, score: rate - 2 * sd });
+    }
+    return out
+      .sort((x, y) => y.score - x.score)
+      .slice(0, limit)
+      .map(({ key, rate, n }) => ({ key, rate, n }));
   }
 }

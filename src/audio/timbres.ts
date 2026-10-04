@@ -102,13 +102,22 @@ function musicbox(a: VoiceArgs) {
 
 // Karplus–Strong rendered once per (rounded) frequency, then fine-tuned with playbackRate
 // so the pitch is exact even though the delay line has an integer length.
+// The buffer is rendered for the nearest equal-tempered semitone (playbackRate then stays
+// within about ±3%), so the continuous tonic still reuses buffers, and the cache is a small
+// LRU: each 2.5 s buffer is ~0.5 MB and would otherwise pile up over a long session.
+const HARP_CACHE_MAX = 32;
 const harpCache = new Map<string, { buf: AudioBuffer; f0: number }>();
 function harpBuffer(ctx: AudioContext, freq: number) {
   const sr = ctx.sampleRate;
-  const N = Math.max(3, Math.round(sr / freq + 0.5));
+  const band = 440 * Math.pow(2, Math.round(12 * Math.log2(freq / 440)) / 12);
+  const N = Math.max(3, Math.round(sr / band + 0.5));
   const key = `${sr}:${N}`;
   const hit = harpCache.get(key);
-  if (hit) return hit;
+  if (hit) {
+    harpCache.delete(key); // re-insert as most recently used
+    harpCache.set(key, hit);
+    return hit;
+  }
   const len = Math.floor(sr * 2.5);
   const buf = ctx.createBuffer(1, len, sr);
   const d = buf.getChannelData(0);
@@ -131,6 +140,8 @@ function harpBuffer(ctx: AudioContext, freq: number) {
   // y[n+N] = (y[n] + y[n+1]) / 2, so the loop period is N - 0.5 samples
   const entry = { buf, f0: sr / (N - 0.5) };
   harpCache.set(key, entry);
+  // evicting a buffer that is still playing is safe: its source node holds a reference
+  if (harpCache.size > HARP_CACHE_MAX) harpCache.delete(harpCache.keys().next().value!);
   return entry;
 }
 
@@ -139,15 +150,22 @@ function harp(a: VoiceArgs) {
   const { buf, f0 } = harpBuffer(ctx, freq);
   const src = ctx.createBufferSource();
   src.buffer = buf;
-  src.playbackRate.value = freq / f0;
+  const rate = freq / f0;
+  src.playbackRate.value = rate;
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
   lp.frequency.value = Math.min(9000, freq * 10);
   const g = ctx.createGain();
-  g.gain.value = 0.8 * vel * loudness(freq);
+  const level = 0.8 * vel * loudness(freq);
+  // The string is still ringing (around -30 dB) when the note ends, so fade it over 0.35 s
+  // (~50 dB) instead of cutting it; the end stays inside the buffer at any playbackRate.
+  const end = t + Math.min(2.45, buf.duration / rate - 0.02);
+  g.gain.setValueAtTime(level, t);
+  g.gain.setValueAtTime(level, end - 0.35);
+  g.gain.setTargetAtTime(0, end - 0.35, 0.06);
   src.connect(lp).connect(g).connect(out);
   src.start(t);
-  src.stop(t + 2.4);
+  src.stop(end);
 }
 
 function pad(a: VoiceArgs) {
@@ -184,15 +202,26 @@ function flute(a: VoiceArgs) {
   const { ctx, out, freq, t, dur, vel } = a;
   const g = ctx.createGain();
   const peak = 0.22 * vel * loudness(freq);
+  const rel = t + Math.max(dur, 0.1);
   g.gain.setValueAtTime(0, t);
   g.gain.linearRampToValueAtTime(peak, t + 0.07);
-  g.gain.setValueAtTime(peak * 0.9, t + Math.max(dur, 0.1));
-  g.gain.setTargetAtTime(0, t + Math.max(dur, 0.1), 0.08);
+  g.gain.setValueAtTime(peak, rel); // hold, then release (a step in level here clicks)
+  g.gain.setTargetAtTime(0, rel, 0.08);
   g.connect(out);
   const o1 = osc(ctx, 'sine', freq);
-  const o2 = osc(ctx, 'sine', freq * 2);
-  const g2 = ctx.createGain();
-  g2.gain.value = 0.18;
+  // A near-pure sine below ~220 Hz has nothing a phone speaker can reproduce, so low notes
+  // get stronger upper partials (exact multiples: the pitch is unchanged). From 220 Hz up
+  // the voice is the original sine + 0.18 octave.
+  const k = Math.min(1, Math.max(0, (220 - freq) / 120));
+  const uppers: OscillatorNode[] = [];
+  for (const [mult, amp] of [[2, 0.18 + 0.32 * k], [3, 0.22 * k], [4, 0.12 * k]]) {
+    if (amp <= 0) continue;
+    const o = osc(ctx, 'sine', freq * mult);
+    const og = ctx.createGain();
+    og.gain.value = amp;
+    o.connect(og).connect(g);
+    uppers.push(o);
+  }
   // gentle, late vibrato (symmetric around the target pitch)
   const lfo = osc(ctx, 'sine', 5);
   const lg = ctx.createGain();
@@ -201,7 +230,6 @@ function flute(a: VoiceArgs) {
   lfo.connect(lg);
   lg.connect(o1.frequency);
   o1.connect(g);
-  o2.connect(g2).connect(g);
   // breath
   if (!noiseBuf) {
     noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
@@ -219,7 +247,7 @@ function flute(a: VoiceArgs) {
   ng.gain.value = 0.05;
   n.connect(bp).connect(ng).connect(g);
   const end = t + dur + 0.6;
-  for (const s of [o1, o2, lfo, n]) {
+  for (const s of [o1, ...uppers, lfo, n]) {
     s.start(t);
     s.stop(end);
   }

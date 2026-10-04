@@ -13,4 +13,10 @@ void archiveOldTrials(20000).catch(() => {});
 
 if ('serviceWorker' in navigator && import.meta.env.PROD && window.isSecureContext) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
+} else if ('serviceWorker' in navigator && import.meta.env.DEV) {
+  // `npm run serve` and the dev server share localhost:5173; keep the preview's worker out of dev
+  navigator.serviceWorker
+    .getRegistrations()
+    .then((rs) => rs.forEach((r) => void r.unregister()))
+    .catch(() => {});
 }

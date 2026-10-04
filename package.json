@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host",
-    "dev:local": "vite",
+    "dev": "vite --host --strictPort",
+    "dev:local": "vite --strictPort",
     "build": "tsc --noEmit && vite build",
-    "serve": "vite preview --host --port 5173",
+    "serve": "vite preview --host --port 5173 --strictPort",
     "test": "vitest run"
   },
   "dependencies": {

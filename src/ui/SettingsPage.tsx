@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { go } from './App';
 import { settings, patch, DEFAULTS } from '../settings';
 import { TIMBRES, type TimbreId } from '../audio/timbres';
@@ -13,6 +13,8 @@ const CONTEXTS: { id: ContextKind; name: string }[] = [
   { id: 'scale', name: '스케일' },
   { id: 'arpeggio', name: '아르페지오' },
 ];
+
+type DataJob = 'export' | 'import' | 'archive';
 
 function toggle<T>(arr: T[], v: T): T[] {
   return arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
@@ -29,29 +31,69 @@ export function SettingsPage() {
   const s = settings.value;
   const [info, setInfo] = useState<Awaited<ReturnType<typeof storageInfo>> | null>(null);
   const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState<DataJob | null>(null);
+  const running = useRef(false); // state alone lets a fast double tap through
   const refresh = () => storageInfo().then(setInfo).catch(() => {});
   useEffect(() => void refresh(), []);
 
-  async function doExport() {
-    const blob = await exportBackup();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `stellar-ear-backup-${new Date().toISOString().slice(0, 10)}.jsonl.gz`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  /** One data job at a time; the export, import and archive buttons are disabled while it runs. */
+  async function run(job: DataJob, work: () => Promise<string>, failMsg: string) {
+    if (running.current) return;
+    running.current = true;
+    setBusy(job);
+    setMsg('');
+    try {
+      setMsg(await work());
+    } catch {
+      setMsg(failMsg);
+    } finally {
+      running.current = false;
+      setBusy(null);
+      void refresh();
+    }
   }
 
-  async function doImport(e: Event) {
-    const f = (e.target as HTMLInputElement).files?.[0];
+  const doExport = () =>
+    run(
+      'export',
+      async () => {
+        const blob = await exportBackup();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `stellar-ear-backup-${new Date().toISOString().slice(0, 10)}.jsonl.gz`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        return '백업 파일을 만들었어요';
+      },
+      '내보내기 실패: 다시 시도해 주세요',
+    );
+
+  function doImport(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const f = input.files?.[0];
+    input.value = ''; // so picking the same file again still fires onChange
     if (!f) return;
-    try {
-      const r = await importBackup(f);
-      setMsg(`가져옴: 세션 ${r.sessions}개, 문제 ${r.trials}개`);
-    } catch {
-      setMsg('가져오기 실패: Stellar Ear 백업 파일(.jsonl.gz)인지 확인해 주세요');
-    }
-    void refresh();
+    void run(
+      'import',
+      async () => {
+        const r = await importBackup(f);
+        if (!r.sessions && !r.trials && !r.followups) return '새로 가져온 기록이 없어요 (이미 모두 들어 있어요)';
+        const skipped = r.skipped ? ` · 세션이 없는 기록 ${r.skipped}개는 건너뜀` : '';
+        return `가져옴: 세션 ${r.sessions}개, 문제 ${r.trials}개${skipped}`;
+      },
+      '가져오기 실패: Stellar Ear 백업 파일(.jsonl.gz)인지 확인해 주세요',
+    );
   }
+
+  const doArchive = () =>
+    run(
+      'archive',
+      async () => {
+        const n = await archiveOldTrials(1000);
+        return n ? `오래된 문제 ${n}개를 압축 보관했어요` : '압축할 만큼 쌓이지 않았어요 (최근 1000개는 그대로 둠)';
+      },
+      '압축 실패: 다시 시도해 주세요',
+    );
 
   return (
     <div class="page">
@@ -193,25 +235,22 @@ export function SettingsPage() {
             {info.usage !== undefined && ` · 사용량 ${(info.usage / 1024 / 1024).toFixed(1)}MB`}
             <br />
             영구 저장: {info.persisted ? '허용됨 (브라우저가 자동으로 지우지 않음)' : '미허용, 정기적으로 백업을 권장해요'}
+            <br />
+            저장 위치: {location.origin} (다른 주소나 포트로 열면 기록이 따로 쌓여요)
           </p>
         )}
         <div class="row">
-          <button onClick={doExport}>백업 내보내기</button>
-          <label class="chip" style={{ cursor: 'pointer' }}>
-            백업 가져오기
-            <input type="file" accept=".gz,application/gzip" style={{ display: 'none' }} onChange={doImport} />
+          <button onClick={doExport} disabled={!!busy}>
+            {busy === 'export' ? '내보내는 중…' : '백업 내보내기'}
+          </button>
+          <label class="chip" style={{ cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.4 : 1 }} aria-disabled={!!busy}>
+            {busy === 'import' ? '가져오는 중…' : '백업 가져오기'}
+            <input type="file" accept=".gz,application/gzip" style={{ display: 'none' }} disabled={!!busy} onChange={doImport} />
           </label>
         </div>
         <div class="row">
-          <button
-            class="ghost"
-            onClick={async () => {
-              const n = await archiveOldTrials(1000);
-              setMsg(n ? `오래된 문제 ${n}개를 압축 보관했어요` : '압축할 만큼 쌓이지 않았어요 (최근 1000개는 그대로 둠)');
-              void refresh();
-            }}
-          >
-            오래된 기록 압축
+          <button class="ghost" onClick={doArchive} disabled={!!busy}>
+            {busy === 'archive' ? '압축 중…' : '오래된 기록 압축'}
           </button>
           {!info?.persisted && (
             <button class="ghost" onClick={() => requestPersistence().then(refresh)}>

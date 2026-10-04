@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { go } from './App';
-import { allTrials, type Exercise, type TrialRec } from '../data/db';
+import { allTrials, db, type Exercise, type TrialRec } from '../data/db';
 import { analyze, pct, type Rate, type SessionPoint } from '../adaptive/stats';
+import { withHints } from '../adaptive/model';
 import { DEGREE_LABELS } from '../music/theory';
 import { TIMBRES } from '../audio/timbres';
 
@@ -33,6 +34,10 @@ export function patternName(key: string): string {
     case 'tim': {
       const [p, t] = body.split('@');
       return `${d(p)}도 · ${timbreName(t)}`;
+    }
+    case 'pos': {
+      const [p, i] = body.split('@');
+      return `${d(p)}도 (${+i + 1}번째 음)`;
     }
   }
   return key;
@@ -103,7 +108,10 @@ export function Stats() {
   const [clean, setClean] = useState(false);
   const [byChunk, setByChunk] = useState(false);
   useEffect(() => {
-    allTrials().then(setTrials).catch(() => setTrials([]));
+    // sessions only fill in the hint flag of old dictation records, so stats still load without them
+    Promise.all([allTrials(), db.sessions.toArray().catch(() => [])])
+      .then(([ts, ss]) => setTrials(withHints(ts, ss)))
+      .catch(() => setTrials([]));
   }, []);
   const a = useMemo(() => (trials ? analyze(trials.filter((t) => t.exercise === ex), { cleanOnly: clean }) : null), [trials, ex, clean]);
 
@@ -123,7 +131,7 @@ export function Stats() {
           딕테이션
         </button>
         <span class="grow" />
-        <button class={`chip ${clean ? 'on' : ''}`} onClick={() => setClean(!clean)} title="쌍의 두 번째 문제만 (이전 문제와 같은 출제 방식)">
+        <button class={`chip ${clean ? 'on' : ''}`} onClick={() => setClean(!clean)} title="직전 문제와 같은 출제 방식인 문제만 (방식이 바뀐 직후와 세션 첫 문제 제외)">
           깨끗한 측정만
         </button>
       </div>
@@ -154,7 +162,7 @@ export function Stats() {
           <div class="card">
             <h2>랜덤 vs 약점 패턴</h2>
             <p class="muted small">
-              파랑은 전체 실력(랜덤 출제), 금색은 지금 약한 패턴이 랜덤 문제에서 나왔을 때, 보라는 같은 패턴을 일부러 냈을 때의 정확도예요.
+              파랑은 전체 실력(랜덤 출제), 금색은 그 시점에 약했던 패턴이 랜덤 문제에서 나왔을 때, 보라는 약했던 패턴을 일부러 냈을 때의 정확도예요.
               금색이 올라오면 약점 훈련이 실제 실력으로 옮겨가고 있다는 뜻이에요.
             </p>
             <div class="legend">
@@ -261,7 +269,7 @@ export function Stats() {
           <div class="card">
             <h2>반응 시간</h2>
             <p class="muted small">
-              음이 울린 순간부터 답할 때까지 (딕테이션은 음마다). 정답 중앙값 {sec(a.rtMedian.correct)}, 오답 중앙값 {sec(a.rtMedian.wrong)}. 빠른 답은 직관, 느린 답은 머릿속 계산에 가까워요.
+              음이 처음 울린 순간부터 답할 때까지 (딕테이션은 음마다, 다시 듣기에 쓴 시간 포함). 정답 중앙값 {sec(a.rtMedian.correct)}, 오답 중앙값 {sec(a.rtMedian.wrong)}. 빠른 답은 직관, 느린 답은 머릿속 계산에 가까워요.
             </p>
             <Bars rows={a.rtBins.map((b) => ({ k: b.label, r: b.r }))} />
           </div>
@@ -281,12 +289,14 @@ export function Stats() {
 
           <div class="card">
             <h2>직전 문제의 영향</h2>
+            <p class="muted small">모두 랜덤 출제 문제의 정확도예요. 문제 내용이 이전 기록과 무관해서, 차이가 나면 직전 문제가 판단에 영향을 준다는 뜻이에요.</p>
             <Bars
               rows={[
-                { k: '직전 정답 뒤', r: a.sequential.afterOk },
-                { k: '직전 오답 뒤', r: a.sequential.afterBad },
-                { k: '랜덤 쌍의 첫 문제', r: a.overall.first },
-                { k: '랜덤 쌍의 두 번째 문제', r: a.overall.clean },
+                { k: '직전 정답 뒤 (랜덤 → 랜덤)', r: a.sequential.afterOk },
+                { k: '직전 오답 뒤 (랜덤 → 랜덤)', r: a.sequential.afterBad },
+                { k: '같은 방식 뒤 (랜덤 → 랜덤)', r: a.overall.clean },
+                { k: '방식이 바뀐 직후 (약점 → 랜덤)', r: a.overall.first },
+                { k: '세션 첫 문제', r: a.overall.sessionFirst },
               ]}
             />
           </div>

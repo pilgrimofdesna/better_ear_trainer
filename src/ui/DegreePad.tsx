@@ -21,16 +21,28 @@ export interface PadMark {
   [pc: number]: 'good' | 'bad' | 'reveal' | undefined;
 }
 
-export function DegreePad({ choices, onPick, marks = {} }: { choices: number[]; onPick: (pc: number) => void; marks?: PadMark }) {
+export function DegreePad({
+  choices,
+  onPick,
+  marks = {},
+  disabled = false,
+}: {
+  choices: number[];
+  onPick: (pc: number) => void;
+  marks?: PadMark;
+  disabled?: boolean; // dimmed and ignoring touches, e.g. while the context plays
+}) {
   const lbl = settings.value.labels;
+  const dim = { opacity: disabled ? '0.45' : '1', transition: 'opacity 0.15s' };
   const button = (p: number, style?: Record<string, string>) => (
     <button
       key={p}
       class={`deg ${KEY_COL[p].acc ? 'acc' : ''} ${marks[p] ?? ''}`}
       style={style}
+      aria-disabled={disabled}
       onPointerDown={(e) => {
         e.preventDefault(); // fire on touch-down for accurate response times
-        onPick(p);
+        if (!disabled) onPick(p);
       }}
     >
       {lbl !== 'solfege' && <span>{DEGREE_LABELS[p]}</span>}
@@ -40,13 +52,13 @@ export function DegreePad({ choices, onPick, marks = {} }: { choices: number[]; 
   const hasAcc = choices.some((p) => KEY_COL[p].acc);
   if (choices.length <= 7 || !hasAcc) {
     return (
-      <div class="pad flat" style={{ '--n': String(Math.min(choices.length, 7)) }}>
+      <div class="pad flat" style={{ '--n': String(Math.min(choices.length, 7)), ...dim }}>
         {choices.map((p) => button(p))}
       </div>
     );
   }
   return (
-    <div class="pad keys">
+    <div class="pad keys" style={dim}>
       {choices.map((p) =>
         button(p, { gridColumn: `${KEY_COL[p].col} / span 2`, gridRow: KEY_COL[p].acc ? '1' : '2' }),
       )}

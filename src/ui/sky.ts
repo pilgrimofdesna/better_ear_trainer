@@ -13,29 +13,40 @@ export function startSky(canvas: HTMLCanvasElement) {
   const ctx = canvas.getContext('2d')!;
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let stars: Star[] = [];
-  let w = 0, h = 0, dpr = 1;
+  let w = 0, h = 0, dpr = 1; // canvas size in CSS px; h is the tallest viewport, not innerHeight
   let meteor: { x: number; y: number; vx: number; vy: number; life: number } | null = null;
 
+  // Android Chrome fires 'resize' whenever its URL bar shows or hides (height only). The canvas
+  // is pinned to the top and kept as tall as the tallest viewport, so that leaves the sky alone;
+  // only a new width (rotation) or a taller window scatters the stars again.
   const resize = () => {
-    dpr = Math.min(2, devicePixelRatio || 1);
-    w = innerWidth;
-    h = innerHeight;
+    const nextDpr = Math.min(2, devicePixelRatio || 1);
+    const regen = innerWidth !== w || innerHeight > h;
+    if (!regen && nextDpr === dpr) return;
+    dpr = nextDpr;
+    if (regen) {
+      w = innerWidth;
+      h = Math.max(innerHeight, screen.height || 0);
+      const n = Math.round((w * h) / 2600);
+      stars = Array.from({ length: n }, () => {
+        const big = Math.random() < 0.06;
+        return {
+          x: Math.random() * w,
+          y: Math.random() * h,
+          r: big ? 1.1 + Math.random() * 0.9 : 0.3 + Math.random() * 0.7,
+          base: 0.25 + Math.random() * 0.6,
+          speed: 0.4 + Math.random() * 1.6,
+          phase: Math.random() * Math.PI * 2,
+          hue: Math.random() < 0.2 ? 45 : Math.random() < 0.5 ? 215 : 230,
+        };
+      });
+    }
     canvas.width = w * dpr;
     canvas.height = h * dpr;
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const n = Math.round((w * h) / 2600);
-    stars = Array.from({ length: n }, () => {
-      const big = Math.random() < 0.06;
-      return {
-        x: Math.random() * w,
-        y: Math.random() * h,
-        r: big ? 1.1 + Math.random() * 0.9 : 0.3 + Math.random() * 0.7,
-        base: 0.25 + Math.random() * 0.6,
-        speed: 0.4 + Math.random() * 1.6,
-        phase: Math.random() * Math.PI * 2,
-        hue: Math.random() < 0.2 ? 45 : Math.random() < 0.5 ? 215 : 230,
-      };
-    });
+    draw(reduce ? 0 : performance.now()); // resizing the canvas cleared it
   };
 
   const draw = (t: number) => {
@@ -76,13 +87,9 @@ export function startSky(canvas: HTMLCanvasElement) {
     flash = Math.max(0, flash - 0.04);
   };
 
-  resize();
+  resize(); // also draws the first frame (the only one when reduced motion is set)
   addEventListener('resize', resize);
-  if (reduce) {
-    draw(0);
-    addEventListener('resize', () => draw(0));
-    return;
-  }
+  if (reduce) return;
   let last = 0;
   const loop = (t: number) => {
     requestAnimationFrame(loop);

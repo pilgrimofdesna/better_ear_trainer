@@ -4,24 +4,26 @@ import { DegreePad, type PadMark } from './DegreePad';
 import { skyFlash } from './sky';
 import { settings } from '../settings';
 import { audio, playEvents, stopAll, wallClock, setVolume } from '../audio/engine';
-import { buildQuestion, type Question, type Reference } from '../session/question';
-import { BlockSchedule, WeaknessModel } from '../adaptive/model';
-import { addTrial, allTrials, endSession, startSession, type Exercise, type TrialRec } from '../data/db';
+import { buildQuestion, noPresentation, notePlayback, type Question, type Reference } from '../session/question';
+import { BlockSchedule, WeaknessModel, withHints } from '../adaptive/model';
+import { addFollowup, addTrial, allTrials, db, endSession, startSession, type Exercise, type TrialRec } from '../data/db';
 import { DEGREE_LABELS, pc, resolutionPath } from '../music/theory';
 import type { NoteEvent, ContextPhrase } from '../music/context';
 
-type Phase = 'loading' | 'ready' | 'listening' | 'answer' | 'feedback';
+// 'context': the question is playing but its target has not sounded yet (context, drone lead)
+type Phase = 'loading' | 'ready' | 'context' | 'listening' | 'answer' | 'feedback';
 
-const wall = () => performance.timeOrigin + performance.now();
+// same epoch clock as the session records; the performance clock stops while the phone sleeps
+const wall = () => Date.now();
 
 function questionEvents(q: Question): { events: NoteEvent[]; first: number; last: number } {
   if (q.exercise === 'single') {
     const lead = q.drone ? 0.7 : 0;
     const events: NoteEvent[] = [{ semi: q.target[0], t: lead, dur: q.noteDur, vel: 0.75 }];
     if (q.drone) {
-      const low = q.target[0] < 0 ? -24 : -12;
-      events.push({ semi: low, t: 0, dur: lead + q.noteDur + 1.6, vel: 0.35, sustain: true });
-      events.push({ semi: low + 12, t: 0, dur: lead + q.noteDur + 1.6, vel: 0.25, sustain: true });
+      // tonic + fifth; anything lower than about 60 Hz vanishes on a phone speaker
+      events.push({ semi: -12, t: 0, dur: lead + q.noteDur + 1.6, vel: 0.35, sustain: true });
+      events.push({ semi: -5, t: 0, dur: lead + q.noteDur + 1.6, vel: 0.22, sustain: true });
     }
     return { events, first: lead, last: lead + q.noteDur };
   }
@@ -51,15 +53,18 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     prevTargetPc: null as number | null,
     lastContext: null as ContextPhrase | null,
     contextPlayed: false,
+    asking: false, // a question is out and not answered yet
     tPresented: 0,
-    tAudioStart: 0,
-    tAudioEnd: 0,
+    pres: noPresentation(),
     tInputs: [] as number[],
     replays: 0,
     contextReplays: 0,
+    // listening after the answer, saved later as a followup of the trial
     probes: 0,
+    postReplays: 0,
+    postContextReplays: 0,
     lastSubmit: null as number | null,
-    pending: null as TrialRec | null,
+    answered: null as { trialId: Promise<number>; sessionId: number } | null, // followup not written yet
     timers: [] as number[],
   });
 
@@ -69,30 +74,51 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     r.current.timers = [];
   };
 
-  async function flush() {
+  /** On leaving the feedback of a trial: log what was listened to after answering, at most once. */
+  function writeFollowup() {
     const st = r.current;
-    if (!st.pending) return;
-    const rec = { ...st.pending, probes: st.probes };
-    st.pending = null;
-    await addTrial(rec);
+    const a = st.answered;
+    if (!a) return;
+    st.answered = null;
+    if (!st.probes && !st.postReplays && !st.postContextReplays) return;
+    const f = {
+      sessionId: a.sessionId,
+      probes: st.probes,
+      postReplays: st.postReplays,
+      postContextReplays: st.postContextReplays,
+      tLeave: wall(),
+    };
+    a.trialId.then((trialId) => addFollowup({ trialId, ...f })).catch((e) => console.error('followup not saved', e));
   }
+
+  const closeSession = () => void r.current.sessionId?.then((id) => endSession(id)).catch(() => {});
 
   useEffect(() => {
     setVolume(settings.value.volume);
     r.current.sessionId = startSession(exercise, settings.value);
-    allTrials()
-      .then((ts) => {
-        r.current.model = new WeaknessModel(ts.filter((t) => t.exercise === exercise));
+    Promise.all([allTrials(), db.sessions.toArray().catch(() => [])])
+      .then(([ts, ss]) => {
+        r.current.model = new WeaknessModel(withHints(ts, ss).filter((t) => t.exercise === exercise));
       })
       .catch(() => {})
       .finally(() => setPhase('ready'));
+    // The back gesture, swiping Chrome away or a tab discard leave without unmounting,
+    // and a hidden page may never come back, so wrap up on hide too (endSession just moves endedAt).
+    const onHide = () => {
+      writeFollowup();
+      closeSession();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') onHide();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    addEventListener('pagehide', onHide);
     return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      removeEventListener('pagehide', onHide);
       clearTimers();
       stopAll();
-      void flush().then(async () => {
-        const id = await r.current.sessionId;
-        if (id) await endSession(id);
-      });
+      onHide();
     };
   }, []);
 
@@ -109,15 +135,21 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     }
     const { events, first, last } = questionEvents(question);
     const res = playEvents(events, question.tonicHz, question.timbre, { delay, keep: true, sustainTimbre: 'pad' });
-    st.tAudioStart = wallClock(res.start + first);
-    st.tAudioEnd = wallClock(res.start + last);
-    setPhase('listening');
-    later(Math.max(0, st.tAudioEnd - wall()), () => setPhase((p) => (p === 'listening' ? 'answer' : p)));
+    const now = wall();
+    const start = wallClock(res.start + first);
+    const end = wallClock(res.start + last);
+    // replays are logged in tPlays; tAudioStart/End stay on the first presentation
+    st.pres = notePlayback(st.pres, now, start, end);
+    const heard = st.pres.tPlays.length > 1; // the target already sounded in an earlier playback
+    setPhase(heard ? 'listening' : 'context');
+    if (!heard) later(Math.max(0, start - now), () => setPhase((p) => (p === 'context' ? 'listening' : p)));
+    later(Math.max(0, end - now), () => setPhase((p) => (p === 'listening' ? 'answer' : p)));
   }
 
-  async function next() {
+  function next() {
     const st = r.current;
-    await flush();
+    if (st.asking) return; // the auto-advance timer, 다음 and Enter can all fire for one trial
+    writeFollowup();
     const question = buildQuestion({
       exercise,
       s: settings.value,
@@ -127,13 +159,17 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
       prevRef: st.prevRef,
       prevTargetPc: st.prevTargetPc,
     });
+    st.asking = true;
     st.contextPlayed = !!question.context;
     if (question.context) st.lastContext = question.context;
     st.prevRef = question;
+    st.pres = noPresentation();
     st.tInputs = [];
     st.replays = 0;
     st.contextReplays = 0;
     st.probes = 0;
+    st.postReplays = 0;
+    st.postContextReplays = 0;
     st.tPresented = wall();
     setQ(question);
     setInput([]);
@@ -144,11 +180,14 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
 
   async function submit(question: Question, answer: number[]) {
     const st = r.current;
+    if (!st.asking) return;
+    st.asking = false;
     const tSubmit = wall();
     const correct = question.target.map((t, i) => pc(t) === answer[i]);
     const allCorrect = correct.every(Boolean);
+    const sessionId = (await st.sessionId)!;
     const rec: TrialRec = {
-      sessionId: (await st.sessionId)!,
+      sessionId,
       exercise,
       index: st.index,
       mode: question.mode,
@@ -175,20 +214,26 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
       answer,
       correct,
       allCorrect,
+      // the first-note hint shows slot 0's answer, so that note had no real choice
+      hinted: exercise === 'dictation' && settings.value.dictation.firstHint ? [0] : [],
       tPresented: st.tPresented,
-      tAudioStart: st.tAudioStart,
-      tAudioEnd: st.tAudioEnd,
+      tAudioStart: st.pres.tAudioStart,
+      tAudioEnd: st.pres.tAudioEnd,
+      tPlays: st.pres.tPlays.filter((t) => t <= tSubmit), // a replay cut off by the answer never sounded
       tInputs: [...st.tInputs],
       tSubmit,
-      rtMs: tSubmit - st.tAudioEnd,
+      rtMs: tSubmit - st.pres.tAudioEnd,
       sincePrevMs: st.lastSubmit === null ? null : tSubmit - st.lastSubmit,
       replays: st.replays,
       contextReplays: st.contextReplays,
-      probes: 0,
+      probes: 0, // listening after the answer goes into a followup record
       melodyKeyRank: question.melodyKeyRank,
       melodyAttempts: question.melodyAttempts,
     };
-    st.pending = rec;
+    // save right away: from here the page can be closed at any moment
+    const trialId = addTrial(rec);
+    trialId.catch((e) => console.error('trial not saved', e));
+    st.answered = { trialId, sessionId };
     st.model.add(rec);
     st.lastSubmit = tSubmit;
     st.index++;
@@ -209,14 +254,14 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
       const res = playEvents(events, question.tonicHz, question.timbre, { delay: 0.15 });
       if (allCorrect) {
         skyFlash();
-        if (settings.value.autoNext) later((res.end - audio().currentTime) * 1000 + 250, () => void next());
+        if (settings.value.autoNext) later((res.end - audio().currentTime) * 1000 + 250, next);
       }
     } else {
       if (allCorrect) {
         skyFlash();
         // a short tonic "landing" then move on
         playEvents([{ semi: 0, t: 0, dur: 0.8, vel: 0.5 }], question.tonicHz, question.timbre, { delay: 0.1 });
-        if (settings.value.autoNext) later(1300, () => void next());
+        if (settings.value.autoNext) later(1300, next);
       }
     }
   }
@@ -225,13 +270,14 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     const st = r.current;
     if (!q) return;
     if (phase === 'feedback') {
-      // audition any degree in the current key after answering
+      // audition any degree in the current key after answering (and stop the auto-advance)
+      clearTimers();
       st.probes++;
       const oct = q.exercise === 'single' ? q.registerOctave : 0;
       playEvents([{ semi: p + 12 * oct, t: 0, dur: 0.8, vel: 0.7 }], q.tonicHz, q.timbre, { delay: 0.01 });
       return;
     }
-    if (phase !== 'listening' && phase !== 'answer') return;
+    if (phase !== 'listening' && phase !== 'answer') return; // nothing to answer before the target sounds
     st.tInputs.push(wall());
     navigator.vibrate?.(8);
     const nextInput = [...input, p];
@@ -246,14 +292,17 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
   }
 
   function replay(withContext: boolean) {
+    const st = r.current;
     if (!q) return;
-    if (withContext) r.current.contextReplays++;
-    else r.current.replays++;
     if (phase === 'feedback') {
-      // after answering, replays are for listening again; don't touch the timing record
+      // after answering, replays are for listening again; don't touch the timing record,
+      // count them for the followup and stop the auto-advance
+      clearTimers();
+      if (withContext) st.postContextReplays++;
+      else st.postReplays++;
       const { events } = questionEvents(q);
       let delay = 0.1;
-      const c = withContext ? (q.context ?? r.current.lastContext) : null;
+      const c = withContext ? (q.context ?? st.lastContext) : null;
       if (c) {
         playEvents(c.events, q.tonicHz, q.contextTimbre, { delay, sustainTimbre: 'pad' });
         delay += c.length + 0.3;
@@ -261,6 +310,8 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
       playEvents(events, q.tonicHz, q.timbre, { delay, keep: !!c, sustainTimbre: 'pad' });
       return;
     }
+    if (withContext) st.contextReplays++;
+    else st.replays++;
     play(q, withContext);
   }
 
@@ -285,7 +336,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     else if (e.code === 'KeyC') replay(true);
     else if (e.code === 'Backspace') undo();
     else if (e.code === 'Enter') {
-      if (phase === 'ready' || phase === 'feedback') void next();
+      if (phase === 'ready' || phase === 'feedback') next();
     } else return;
     e.preventDefault();
   };
@@ -297,6 +348,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
 
   const title = exercise === 'single' ? '개별 음 맞추기' : '멜로딕 딕테이션';
   const acc = tally.n ? Math.round((100 * tally.ok) / tally.n) : 0;
+  const hearing = phase === 'context' || phase === 'listening';
 
   return (
     <div class="page">
@@ -318,21 +370,21 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
               <br />
               조성 맥락을 듣고 {exercise === 'single' ? '마지막 음이' : '멜로디의 각 음이'} 몇 도인지 고르세요.
             </p>
-            <button class="primary" disabled={phase === 'loading'} onClick={() => void next()}>
+            <button class="primary" disabled={phase === 'loading'} onClick={() => next()}>
               {phase === 'loading' ? '기록 불러오는 중…' : '첫 문제 듣기'}
             </button>
           </>
         ) : exercise === 'single' ? (
           <>
-            <div class={`orb ${phase === 'listening' ? 'listening' : ''} ${result ? (result[0] ? 'good' : 'bad') : ''}`}>
-              {result && q ? DEGREE_LABELS[pc(q.target[0])] : phase === 'listening' ? '♪' : '?'}
+            <div class={`orb ${hearing ? 'listening' : ''} ${result ? (result[0] ? 'good' : 'bad') : ''}`}>
+              {result && q ? DEGREE_LABELS[pc(q.target[0])] : hearing ? '♪' : '?'}
             </div>
             <div class="feedback">
               {result
                 ? result[0]
                   ? '정답'
                   : `${DEGREE_LABELS[pc(q!.target[0])]}도였어요. 버튼을 눌러 비교해 보세요`
-                : phase === 'listening'
+                : hearing
                   ? '듣는 중'
                   : '몇 도일까요?'}
             </div>
@@ -346,7 +398,11 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
                 return (
                   <div
                     class={`slot ${filled ? 'filled' : ''} ${cls}`}
-                    onClick={() => result && playEvents([{ semi: t, t: 0, dur: 0.8, vel: 0.7 }], q!.tonicHz, q!.timbre, { delay: 0.01 })}
+                    onClick={() => {
+                      if (!result) return;
+                      clearTimers(); // listening again: no auto-advance
+                      playEvents([{ semi: t, t: 0, dur: 0.8, vel: 0.7 }], q!.tonicHz, q!.timbre, { delay: 0.01 });
+                    }}
                   >
                     <div>
                       {filled ? DEGREE_LABELS[input[i]] : i === 0 && settings.value.dictation.firstHint ? <span class="muted">{DEGREE_LABELS[pc(t)]}</span> : ''}
@@ -361,7 +417,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
                 ? result.every(Boolean)
                   ? '모두 정답'
                   : `${result.filter(Boolean).length} / ${result.length} 정답 · 작은 금색 숫자가 정답, 칸을 누르면 그 음이 나와요`
-                : phase === 'listening'
+                : hearing
                   ? '듣는 중'
                   : '순서대로 입력하세요'}
             </div>
@@ -380,12 +436,12 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
               </button>
             )}
             {phase === 'feedback' && (
-              <button class="primary" onClick={() => void next()}>
+              <button class="primary" onClick={() => next()}>
                 다음
               </button>
             )}
           </div>
-          <DegreePad choices={q.choiceSet} onPick={pick} marks={marks} />
+          <DegreePad choices={q.choiceSet} onPick={pick} marks={marks} disabled={phase === 'context'} />
         </>
       )}
     </div>
