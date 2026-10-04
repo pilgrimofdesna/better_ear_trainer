@@ -196,6 +196,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     setResult(correct);
     setTally((t) => ({ n: t.n + 1, ok: t.ok + (allCorrect ? 1 : 0), streak: allCorrect ? t.streak + 1 : 0 }));
     setPhase('feedback');
+    if (!allCorrect) navigator.vibrate?.([25, 50, 25]);
     clearTimers();
     stopAll();
 
@@ -232,6 +233,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     }
     if (phase !== 'listening' && phase !== 'answer') return;
     st.tInputs.push(wall());
+    navigator.vibrate?.(8);
     const nextInput = [...input, p];
     setInput(nextInput);
     if (nextInput.length >= q.target.length) void submit(q, nextInput);
@@ -267,6 +269,31 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     stopAll();
     go('home');
   }
+
+  // PC keyboard: 1–7 = natural degrees, Shift+2/3/4/6/7 = ♭2 ♭3 ♯4 ♭6 ♭7,
+  // Space = replay, C = context, Backspace = undo, Enter = next / start
+  const keys = useRef<(e: KeyboardEvent) => void>(() => {});
+  keys.current = (e: KeyboardEvent) => {
+    const naturals = [0, 2, 4, 5, 7, 9, 11];
+    const accidentals: Record<number, number> = { 2: 1, 3: 3, 4: 6, 6: 8, 7: 10 };
+    const digit = /^Digit([1-7])$/.exec(e.code);
+    if (digit) {
+      const n = +digit[1];
+      const p = e.shiftKey ? accidentals[n] : naturals[n - 1];
+      if (p !== undefined && q?.choiceSet.includes(p)) pick(p);
+    } else if (e.code === 'Space') replay(false);
+    else if (e.code === 'KeyC') replay(true);
+    else if (e.code === 'Backspace') undo();
+    else if (e.code === 'Enter') {
+      if (phase === 'ready' || phase === 'feedback') void next();
+    } else return;
+    e.preventDefault();
+  };
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => keys.current(e);
+    addEventListener('keydown', h);
+    return () => removeEventListener('keydown', h);
+  }, []);
 
   const title = exercise === 'single' ? '개별 음 맞추기' : '멜로딕 딕테이션';
   const acc = tally.n ? Math.round((100 * tally.ok) / tally.n) : 0;
@@ -317,7 +344,10 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
                 const filled = i < input.length;
                 const cls = result ? (result[i] ? 'good' : 'bad') : filled ? 'filled' : i === input.length ? 'cur' : '';
                 return (
-                  <div class={`slot ${filled ? 'filled' : ''} ${cls}`}>
+                  <div
+                    class={`slot ${filled ? 'filled' : ''} ${cls}`}
+                    onClick={() => result && playEvents([{ semi: t, t: 0, dur: 0.8, vel: 0.7 }], q!.tonicHz, q!.timbre, { delay: 0.01 })}
+                  >
                     <div>
                       {filled ? DEGREE_LABELS[input[i]] : i === 0 && settings.value.dictation.firstHint ? <span class="muted">{DEGREE_LABELS[pc(t)]}</span> : ''}
                       {result && !result[i] && <span class="fix">{DEGREE_LABELS[pc(t)]}</span>}
@@ -330,7 +360,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
               {result
                 ? result.every(Boolean)
                   ? '모두 정답'
-                  : `${result.filter(Boolean).length} / ${result.length} 정답 · 아래 금색이 정답`
+                  : `${result.filter(Boolean).length} / ${result.length} 정답 · 작은 금색 숫자가 정답, 칸을 누르면 그 음이 나와요`
                 : phase === 'listening'
                   ? '듣는 중'
                   : '순서대로 입력하세요'}

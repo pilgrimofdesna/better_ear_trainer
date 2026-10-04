@@ -105,7 +105,7 @@ function musicbox(a: VoiceArgs) {
 const harpCache = new Map<string, { buf: AudioBuffer; f0: number }>();
 function harpBuffer(ctx: AudioContext, freq: number) {
   const sr = ctx.sampleRate;
-  const N = Math.max(2, Math.round(sr / freq - 0.5));
+  const N = Math.max(3, Math.round(sr / freq + 0.5));
   const key = `${sr}:${N}`;
   const hit = harpCache.get(key);
   if (hit) return hit;
@@ -117,7 +117,7 @@ function harpBuffer(ctx: AudioContext, freq: number) {
   // soften the excitation
   for (let k = 0; k < 2; k++) for (let i = 1; i < N; i++) line[i] = 0.5 * (line[i] + line[i - 1]);
   let idx = 0;
-  const damp = 0.996;
+  const damp = Math.pow(0.5, 1 / ((sr / N) * 0.8)); // same ~0.8 s half-life in every register
   for (let i = 0; i < len; i++) {
     const next = (idx + 1) % N;
     const v = line[idx];
@@ -128,7 +128,8 @@ function harpBuffer(ctx: AudioContext, freq: number) {
   let peak = 0;
   for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(d[i]));
   for (let i = 0; i < len; i++) d[i] /= peak || 1;
-  const entry = { buf, f0: sr / (N + 0.5) }; // the averaging filter adds half a sample of delay
+  // y[n+N] = (y[n] + y[n+1]) / 2, so the loop period is N - 0.5 samples
+  const entry = { buf, f0: sr / (N - 0.5) };
   harpCache.set(key, entry);
   return entry;
 }
@@ -143,7 +144,7 @@ function harp(a: VoiceArgs) {
   lp.type = 'lowpass';
   lp.frequency.value = Math.min(9000, freq * 10);
   const g = ctx.createGain();
-  g.gain.value = 0.3 * vel * loudness(freq);
+  g.gain.value = 0.8 * vel * loudness(freq);
   src.connect(lp).connect(g).connect(out);
   src.start(t);
   src.stop(t + 2.4);
