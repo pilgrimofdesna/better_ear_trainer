@@ -37,7 +37,7 @@ function questionEvents(q: Question): { events: NoteEvent[]; first: number; last
 }
 
 export function Trainer({ exercise }: { exercise: Exercise }) {
-  const [phase, setPhase] = useState<Phase>('loading');
+  const [phase, setPhaseState] = useState<Phase>('loading');
   const [q, setQ] = useState<Question | null>(null);
   const [input, setInput] = useState<number[]>([]);
   const [marks, setMarks] = useState<PadMark>({});
@@ -65,13 +65,35 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     postContextReplays: 0,
     lastSubmit: null as number | null,
     answered: null as { trialId: Promise<number>; sessionId: number } | null, // followup not written yet
-    timers: [] as number[],
+    timers: [] as number[], // phase timers of the current playback
+    advance: 0, // pending auto-advance to the next question
+    // handlers read these, not the render's copies, so a tap landing before a re-render
+    // (e.g. right after 다음 or the auto-advance) can't act on the previous question's state
+    phase: 'loading' as Phase,
+    input: [] as number[],
   });
+
+  const setPhase = (p: Phase) => {
+    r.current.phase = p;
+    setPhaseState(p);
+  };
+  const setInputs = (xs: number[]) => {
+    r.current.input = xs;
+    setInput(xs);
+  };
 
   const later = (ms: number, fn: () => void) => r.current.timers.push(window.setTimeout(fn, ms));
   const clearTimers = () => {
     r.current.timers.forEach(clearTimeout);
     r.current.timers = [];
+  };
+  const cancelAdvance = () => {
+    clearTimeout(r.current.advance);
+    r.current.advance = 0;
+  };
+  const advanceLater = (ms: number) => {
+    cancelAdvance();
+    r.current.advance = window.setTimeout(next, ms);
   };
 
   /** On leaving the feedback of a trial: log what was listened to after answering, at most once. */
@@ -117,6 +139,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
       document.removeEventListener('visibilitychange', onVisibility);
       removeEventListener('pagehide', onHide);
       clearTimers();
+      cancelAdvance();
       stopAll();
       onHide();
     };
@@ -142,13 +165,14 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     st.pres = notePlayback(st.pres, now, start, end);
     const heard = st.pres.tPlays.length > 1; // the target already sounded in an earlier playback
     setPhase(heard ? 'listening' : 'context');
-    if (!heard) later(Math.max(0, start - now), () => setPhase((p) => (p === 'context' ? 'listening' : p)));
-    later(Math.max(0, end - now), () => setPhase((p) => (p === 'listening' ? 'answer' : p)));
+    if (!heard) later(Math.max(0, start - now), () => st.phase === 'context' && setPhase('listening'));
+    later(Math.max(0, end - now), () => st.phase === 'listening' && setPhase('answer'));
   }
 
   function next() {
     const st = r.current;
     if (st.asking) return; // the auto-advance timer, 다음 and Enter can all fire for one trial
+    cancelAdvance();
     writeFollowup();
     const question = buildQuestion({
       exercise,
@@ -172,7 +196,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     st.postContextReplays = 0;
     st.tPresented = wall();
     setQ(question);
-    setInput([]);
+    setInputs([]);
     setMarks({});
     setResult(null);
     play(question, !!question.context);
@@ -254,14 +278,14 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
       const res = playEvents(events, question.tonicHz, question.timbre, { delay: 0.15 });
       if (allCorrect) {
         skyFlash();
-        if (settings.value.autoNext) later((res.end - audio().currentTime) * 1000 + 250, next);
+        if (settings.value.autoNext) advanceLater((res.end - audio().currentTime) * 1000 + 250);
       }
     } else {
       if (allCorrect) {
         skyFlash();
         // a short tonic "landing" then move on
         playEvents([{ semi: 0, t: 0, dur: 0.8, vel: 0.5 }], question.tonicHz, question.timbre, { delay: 0.1 });
-        if (settings.value.autoNext) later(1300, next);
+        if (settings.value.autoNext) advanceLater(1300);
       }
     }
   }
@@ -269,35 +293,36 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
   function pick(p: number) {
     const st = r.current;
     if (!q) return;
-    if (phase === 'feedback') {
+    if (st.phase === 'feedback') {
       // audition any degree in the current key after answering (and stop the auto-advance)
-      clearTimers();
+      cancelAdvance();
       st.probes++;
       const oct = q.exercise === 'single' ? q.registerOctave : 0;
       playEvents([{ semi: p + 12 * oct, t: 0, dur: 0.8, vel: 0.7 }], q.tonicHz, q.timbre, { delay: 0.01 });
       return;
     }
-    if (phase !== 'listening' && phase !== 'answer') return; // nothing to answer before the target sounds
+    if (st.phase !== 'listening' && st.phase !== 'answer') return; // nothing to answer before the target sounds
     st.tInputs.push(wall());
     navigator.vibrate?.(8);
-    const nextInput = [...input, p];
-    setInput(nextInput);
+    const nextInput = [...st.input, p];
+    setInputs(nextInput);
     if (nextInput.length >= q.target.length) void submit(q, nextInput);
   }
 
   function undo() {
-    if (phase === 'feedback' || !input.length) return;
-    r.current.tInputs.pop();
-    setInput(input.slice(0, -1));
+    const st = r.current;
+    if (st.phase === 'feedback' || !st.input.length) return;
+    st.tInputs.pop();
+    setInputs(st.input.slice(0, -1));
   }
 
   function replay(withContext: boolean) {
     const st = r.current;
     if (!q) return;
-    if (phase === 'feedback') {
+    if (st.phase === 'feedback') {
       // after answering, replays are for listening again; don't touch the timing record,
       // count them for the followup and stop the auto-advance
-      clearTimers();
+      cancelAdvance();
       if (withContext) st.postContextReplays++;
       else st.postReplays++;
       const { events } = questionEvents(q);
@@ -317,6 +342,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
 
   async function quit() {
     clearTimers();
+    cancelAdvance();
     stopAll();
     go('home');
   }
@@ -336,7 +362,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     else if (e.code === 'KeyC') replay(true);
     else if (e.code === 'Backspace') undo();
     else if (e.code === 'Enter') {
-      if (phase === 'ready' || phase === 'feedback') next();
+      if (r.current.phase === 'ready' || r.current.phase === 'feedback') next();
     } else return;
     e.preventDefault();
   };
@@ -400,7 +426,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
                     class={`slot ${filled ? 'filled' : ''} ${cls}`}
                     onClick={() => {
                       if (!result) return;
-                      clearTimers(); // listening again: no auto-advance
+                      cancelAdvance(); // listening again: no auto-advance
                       playEvents([{ semi: t, t: 0, dur: 0.8, vel: 0.7 }], q!.tonicHz, q!.timbre, { delay: 0.01 });
                     }}
                   >
