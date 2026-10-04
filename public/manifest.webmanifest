@@ -1,0 +1,10 @@
+{
+  "name": "Stellar Ear — 기능 청음",
+  "short_name": "Stellar Ear",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#05070f",
+  "theme_color": "#05070f",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

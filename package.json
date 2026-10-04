@@ -1,0 +1,25 @@
+{
+  "name": "stellar-ear",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "dev:local": "vite",
+    "build": "tsc --noEmit && vite build",
+    "serve": "vite preview --host --port 5173",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@preact/signals": "^2.11.3",
+    "dexie": "^4.4.6",
+    "preact": "^11.0.0"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "fake-indexeddb": "^6.2.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3"
+  }
+}
