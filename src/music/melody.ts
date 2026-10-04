@@ -185,6 +185,7 @@ export function generateMelody(opts: MelodyOptions, maxAttempts = 400): Melody {
   const drawn = pick(o.pool);
   const want = !inScale(drawn, o.mode) && placeable(o, plan).includes(drawn) ? drawn : null;
   let best: Melody | null = null; // best line containing `want`
+  let pass: Melody | null = null; // best line of any kind that passes the key check
   let backup: Melody | null = null; // best line of any kind
   for (let a = 1; a <= maxAttempts; a++) {
     const seq = attempt(o, plan);
@@ -193,11 +194,16 @@ export function generateMelody(opts: MelodyOptions, maxAttempts = 400): Melody {
     const cand = { semis: seq, attempts: a, keyRank: k.aloneRank, keyMargin: k.margin };
     const strict = o.length >= 4 ? k.aloneRank <= 2 : true;
     const has = want === null || seq.some((s) => pc(s) === want);
-    if (has && k.combinedRank === 0 && k.margin > 0.02 && strict) return cand;
+    const passes = k.combinedRank === 0 && k.margin > 0.02 && strict;
+    if (has && passes) return cand;
+    if (passes && (!pass || cand.keyMargin > pass.keyMargin)) pass = cand;
     if (has && (!best || cand.keyMargin > best.keyMargin)) best = cand;
     if (!backup || cand.keyMargin > backup.keyMargin) backup = cand;
   }
-  const found = best ?? backup;
+  // With the whole scale in the pool the chromatic degree is only a colour: keep the key
+  // clear rather than force it. A sparse custom pool may have no other way to ask it.
+  const fullScale = SCALES[o.mode].every((p) => o.pool.includes(p));
+  const found = (fullScale ? pass : null) ?? best ?? pass ?? backup;
   if (found) return found;
   // nothing obeyed the rules: a free walk over pool tones can always finish (it may repeat)
   const seq = attempt(o, makePlan(o, true)) ?? new Array(o.length).fill(plan.ends[0]);

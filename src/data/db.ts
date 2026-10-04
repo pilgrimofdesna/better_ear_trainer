@@ -260,6 +260,9 @@ export async function exportBackup(): Promise<Blob> {
 const sessionKey = (s: SessionRec) => `${s.startedAt}|${s.userAgent}|${s.exercise}`;
 const trialKey = (sKey: string, t: TrialRec) => `${sKey}#${t.index}#${t.tPresented}`;
 const followupKey = (tKey: string, f: FollowupRec) => `${tKey}@${f.tLeave}`;
+// Session-independent fingerprint. The id-based import of v0.1 attached some trials to
+// the wrong session, so their trial key differs from the original's; this still matches.
+const contentKey = (t: TrialRec) => `${t.exercise}|${t.tPresented}|${t.tSubmit}`;
 
 function withoutId<T extends { id?: number }>(rec: T): T {
   const copy = { ...rec };
@@ -306,10 +309,13 @@ export function importBackup(file: Blob): Promise<ImportResult> {
     const localSKey = new Map(local.sessions.map((s) => [s.id!, sessionKey(s)]));
     const trialIds = new Map<string, number>(); // trial key -> local id
     const localTKey = new Map<number, string>();
+    const localByContent = new Map<string, { key: string; sKey: string }>();
     for (const t of local.trials) {
-      const k = trialKey(localSKey.get(t.sessionId) ?? `?${t.sessionId}`, t);
+      const sKey = localSKey.get(t.sessionId) ?? `?${t.sessionId}`;
+      const k = trialKey(sKey, t);
       trialIds.set(k, t.id!);
       localTKey.set(t.id!, k);
+      localByContent.set(contentKey(t), { key: k, sKey });
     }
     const haveF = new Set(local.followups.map((f) => followupKey(localTKey.get(f.trialId) ?? `?${f.trialId}`, f)));
 
@@ -331,6 +337,7 @@ export function importBackup(file: Blob): Promise<ImportResult> {
     const fileTrial = new Map<number, { key: string; sKey: string }>(); // file id -> keys
     const newT: { key: string; sKey: string; rec: TrialRec }[] = [];
     const queued = new Set<string>();
+    const queuedContent = new Set<string>();
     for (const t of fileT) {
       const sKey = fileSKey.get(t.sessionId);
       if (sKey === undefined) {
@@ -338,9 +345,16 @@ export function importBackup(file: Blob): Promise<ImportResult> {
         continue;
       }
       const key = trialKey(sKey, t);
+      const same = trialIds.has(key) ? undefined : localByContent.get(contentKey(t));
+      if (same) {
+        // already here under another session key: link the file's follow-ups to that copy
+        fileTrial.set(t.id!, same);
+        continue;
+      }
       fileTrial.set(t.id!, { key, sKey });
-      if (trialIds.has(key) || queued.has(key)) continue; // also drops duplicates inside the file
+      if (trialIds.has(key) || queued.has(key) || queuedContent.has(contentKey(t))) continue; // also drops duplicates inside the file
       queued.add(key);
+      queuedContent.add(contentKey(t));
       newT.push({ key, sKey, rec: withoutId(t) });
     }
     newT.sort((a, b) => a.rec.tSubmit - b.rec.tSubmit);

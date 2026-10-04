@@ -162,6 +162,27 @@ describe('importBackup', () => {
     expect(await allTrials()).toHaveLength(5);
   });
 
+  it('does not duplicate trials that the v0.1 id-based import attached to the wrong session', async () => {
+    await fill('pc', T0, 2, 15);
+    const pcSessions = await db.sessions.toArray();
+    const pcTrials = await db.trials.toArray();
+    const pcBackup = await exportBackup();
+    await db.delete();
+    await db.open();
+    await fill('phone', T0 + HOUR, 3, 5); // phone trial ids 1-15, sessions 1-3
+    // v0.1 import: skipped clashing ids, kept foreign ids and session ids as they were
+    await db.sessions.bulkAdd(pcSessions.filter((s) => s.id! > 3));
+    await db.trials.bulkAdd(pcTrials.filter((t) => t.id! > 15)); // PC session 2 trials now sit in phone session 2
+    const before = (await allTrials()).length;
+
+    const r = await importBackup(pcBackup);
+    const all = await allTrials();
+    const distinct = new Set(all.map((t) => `${t.contextLabel}|${t.tPresented}`));
+    expect(distinct.size).toBe(all.length); // nothing stored twice
+    expect(all.length).toBe(before + r.trials);
+    expect(r.trials).toBe(15); // only the PC trials the old import dropped are new
+  });
+
   it('rejects a file that is not a Stellar Ear backup', async () => {
     await expect(importBackup(await gzipLines([{ hello: 1 }]))).rejects.toThrow();
     expect(await db.sessions.count()).toBe(0);

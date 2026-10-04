@@ -72,7 +72,9 @@ export const latency = (t: TrialRec) => {
   return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN;
 };
 
-const replayed = (t: TrialRec) => t.replays + t.contextReplays > 0;
+// the target sounded more than once before the answer (skipping the context to reach it
+// doesn't count); old records without tPlays fall back to the replay counters
+const replayed = (t: TrialRec) => (t.tPlays ? t.tPlays.length > 1 : t.replays + t.contextReplays > 0);
 
 // ---- patterns ----
 

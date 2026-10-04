@@ -70,7 +70,7 @@ describe('melody generator', () => {
           // (do–fi–mi is too short for K-S to confirm C major, but the played context does)
           else expect(m.semis.some((s) => !inScale(s, mode))).toBe(true);
         }
-        expect(inKey / n).toBeGreaterThan(0.75);
+        expect(inKey / n).toBeGreaterThan(0.97); // the full pool never needs to force a chromatic degree
         expect(attempts / n).toBeLessThan(60);
       });
     }

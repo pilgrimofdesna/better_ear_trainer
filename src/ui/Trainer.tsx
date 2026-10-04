@@ -96,12 +96,15 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     r.current.advance = window.setTimeout(next, ms);
   };
 
-  /** On leaving the feedback of a trial: log what was listened to after answering, at most once. */
-  function writeFollowup() {
+  /**
+   * Log what was listened to after answering. `final` (next question, unmount) closes the
+   * trial; a page hide writes what was heard so far and keeps counting in case the user returns.
+   */
+  function writeFollowup(final: boolean) {
     const st = r.current;
     const a = st.answered;
     if (!a) return;
-    st.answered = null;
+    if (final) st.answered = null;
     if (!st.probes && !st.postReplays && !st.postContextReplays) return;
     const f = {
       sessionId: a.sessionId,
@@ -110,6 +113,10 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
       postContextReplays: st.postContextReplays,
       tLeave: wall(),
     };
+    // each followup row holds only the listening since the previous one
+    st.probes = 0;
+    st.postReplays = 0;
+    st.postContextReplays = 0;
     a.trialId.then((trialId) => addFollowup({ trialId, ...f })).catch((e) => console.error('followup not saved', e));
   }
 
@@ -127,7 +134,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     // The back gesture, swiping Chrome away or a tab discard leave without unmounting,
     // and a hidden page may never come back, so wrap up on hide too (endSession just moves endedAt).
     const onHide = () => {
-      writeFollowup();
+      writeFollowup(false);
       closeSession();
     };
     const onVisibility = () => {
@@ -141,7 +148,8 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
       clearTimers();
       cancelAdvance();
       stopAll();
-      onHide();
+      writeFollowup(true);
+      closeSession();
     };
   }, []);
 
@@ -173,7 +181,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     const st = r.current;
     if (st.asking) return; // the auto-advance timer, 다음 and Enter can all fire for one trial
     cancelAdvance();
-    writeFollowup();
+    writeFollowup(true);
     const question = buildQuestion({
       exercise,
       s: settings.value,
