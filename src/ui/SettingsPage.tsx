@@ -4,7 +4,7 @@ import { settings, patch, DEFAULTS } from '../settings';
 import { TIMBRES, type TimbreId } from '../audio/timbres';
 import { audio, playEvents, setVolume } from '../audio/engine';
 import type { ContextKind } from '../music/context';
-import { DEGREE_LABELS, midiToHz } from '../music/theory';
+import { DEGREE_LABELS, LABEL_KINDS, midiToHz, type LabelKind } from '../music/theory';
 import { archiveOldTrials, exportBackup, importBackup, storageInfo, requestPersistence } from '../data/db';
 
 const CONTEXTS: { id: ContextKind; name: string }[] = [
@@ -185,20 +185,27 @@ export function SettingsPage() {
 
       <div class="card">
         <h2>화면과 진행</h2>
-        <div class="row">
-          <span class="muted small">버튼 아래 작은 글씨</span>
-          {(
-            [
-              ['pc', '숫자 0–11'],
-              ['solfege', '계이름'],
-              ['none', '없음'],
-            ] as const
-          ).map(([id, name]) => (
-            <button class={`chip ${(s.subLabel ?? 'pc') === id ? 'on' : ''}`} onClick={() => patch((x) => (x.subLabel = id))}>
-              {name}
-            </button>
-          ))}
-        </div>
+        <label class="field" for="label-big">
+          <span>음 이름 (크게)</span>
+          <select id="label-big" value={s.label ?? 'degree'} onChange={(e) => patch((x) => (x.label = (e.target as HTMLSelectElement).value as LabelKind))}>
+            {LABEL_KINDS.map((k) => (
+              <option value={k.id}>{k.name}</option>
+            ))}
+          </select>
+        </label>
+        <label class="field" for="label-small">
+          <span>작게 함께 표시</span>
+          <select
+            id="label-small"
+            value={s.smallLabel ?? 'movable0'}
+            onChange={(e) => patch((x) => (x.smallLabel = (e.target as HTMLSelectElement).value as LabelKind | 'none'))}
+          >
+            {LABEL_KINDS.map((k) => (
+              <option value={k.id}>{k.name}</option>
+            ))}
+            <option value="none">없음</option>
+          </select>
+        </label>
         <label class="field">
           <span>정답이면 자동으로 다음 문제</span>
           <input type="checkbox" checked={s.autoNext} onChange={() => patch((x) => (x.autoNext = !x.autoNext))} />

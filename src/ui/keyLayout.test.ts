@@ -19,3 +19,17 @@ describe('answer pad follows the mode', () => {
     expect(major[1]).toEqual({ col: 2, acc: true });
   });
 });
+
+import { labelFor } from '../music/theory';
+describe('naming systems', () => {
+  it('names minor degrees in each system', () => {
+    // C minor (tonicPc 0): 1, ♭3 and the raised 7th
+    const names = (kind: Parameters<typeof labelFor>[0]) => [0, 3, 11].map((p) => labelFor(kind, p, 'minor', 0));
+    expect(names('degree')).toEqual(['1', '3', '♯7']);
+    expect(names('do')).toEqual(['do', 'me', 'ti']);
+    expect(names('la')).toEqual(['la', 'do', 'si']);
+    expect(names('movable0')).toEqual(['0', '3', '11']);
+    expect([0, 3, 11].map((p) => labelFor('note', p, 'minor', 9))).toEqual(['A', 'C', 'G♯']); // A minor
+    expect(labelFor('fixed0', 3, 'minor', 9)).toBe('0');
+  });
+});

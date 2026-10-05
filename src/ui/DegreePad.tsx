@@ -1,4 +1,4 @@
-import { type Mode, SCALES, SOLFEGE, degreeName } from '../music/theory';
+import { type Mode, SCALES, labelFor } from '../music/theory';
 import { settings } from '../settings';
 
 /**
@@ -25,17 +25,20 @@ export interface PadMark {
 export function DegreePad({
   choices,
   mode,
+  tonicPc,
   onPick,
   marks = {},
   disabled = false,
 }: {
   choices: number[];
   mode: Mode;
+  tonicPc: number;
   onPick: (pc: number) => void;
   marks?: PadMark;
   disabled?: boolean; // dimmed and ignoring touches, e.g. while the context plays
 }) {
-  const sub = settings.value.subLabel ?? 'pc';
+  const big = settings.value.label ?? 'degree';
+  const small = settings.value.smallLabel ?? 'movable0';
   const layout = keyLayout(mode);
   const dim = { opacity: disabled ? '0.45' : '1', transition: 'opacity 0.15s' };
   const button = (p: number, style?: Record<string, string>) => (
@@ -44,14 +47,14 @@ export function DegreePad({
       class={`deg ${layout[p].acc ? 'acc' : ''} ${marks[p] ?? ''}`}
       style={style}
       aria-disabled={disabled}
-      aria-label={`${degreeName(p, mode)}도`}
+      aria-label={labelFor(big, p, mode, tonicPc)}
       onPointerDown={(e) => {
         e.preventDefault(); // fire on touch-down for accurate response times
         if (!disabled) onPick(p);
       }}
     >
-      <span>{degreeName(p, mode)}</span>
-      {sub !== 'none' && <span class="sol">{sub === 'pc' ? p : SOLFEGE[p]}</span>}
+      <span>{labelFor(big, p, mode, tonicPc)}</span>
+      {small !== 'none' && small !== big && <span class="sol">{labelFor(small, p, mode, tonicPc)}</span>}
     </button>
   );
   const hasAcc = choices.some((p) => layout[p].acc);

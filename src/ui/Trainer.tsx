@@ -7,7 +7,7 @@ import { audio, playEvents, stopAll, wallClock, setVolume } from '../audio/engin
 import { buildQuestion, noPresentation, notePlayback, type Question, type Reference } from '../session/question';
 import { BlockSchedule, WeaknessModel, withHints } from '../adaptive/model';
 import { addFollowup, addTrial, allTrials, db, endSession, startSession, voidTrial, type Exercise, type TrialRec } from '../data/db';
-import { SCALES, degreeName, freqOf, pc, resolutionPath } from '../music/theory';
+import { type Mode, SCALES, labelFor, freqOf, pc, resolutionPath } from '../music/theory';
 import type { NoteEvent, ContextPhrase } from '../music/context';
 
 // 'context': the question is playing but its target has not sounded yet (context, drone lead)
@@ -436,6 +436,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
   const title = exercise === 'single' ? '개별 음 맞추기' : '멜로딕 딕테이션';
   const acc = tally.n ? Math.round((100 * tally.ok) / tally.n) : 0;
   const hearing = phase === 'context' || phase === 'listening';
+  const name = (semi: number) => labelFor(settings.value.label ?? 'degree', semi, (q?.mode ?? 'major') as Mode, q?.tonicPc ?? 0);
 
   return (
     <div class="page">
@@ -474,13 +475,13 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
         ) : exercise === 'single' ? (
           <>
             <div class={`orb ${hearing ? 'listening' : ''} ${result ? (result[0] ? 'good' : 'bad') : ''}`}>
-              {result && q ? degreeName(q.target[0], q.mode) : hearing ? '♪' : '?'}
+              {result && q ? name(q.target[0]) : hearing ? '♪' : '?'}
             </div>
             <div class="feedback">
               {result
                 ? result[0]
                   ? '정답'
-                  : `${degreeName(q!.target[0], q!.mode)}도였어요. 버튼을 눌러 비교해 보세요`
+                  : `정답은 ${name(q!.target[0])}였어요. 버튼을 눌러 비교해 보세요`
                 : hearing
                   ? '듣는 중'
                   : '몇 도일까요?'}
@@ -502,8 +503,8 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
                     }}
                   >
                     <div>
-                      {filled ? degreeName(input[i], q!.mode) : i === 0 && settings.value.dictation.firstHint ? <span class="muted">{degreeName(t, q!.mode)}</span> : ''}
-                      {result && !result[i] && <span class="fix">{degreeName(t, q!.mode)}</span>}
+                      {filled ? name(input[i]) : i === 0 && settings.value.dictation.firstHint ? <span class="muted">{name(t)}</span> : ''}
+                      {result && !result[i] && <span class="fix">{name(t)}</span>}
                     </div>
                   </div>
                 );
@@ -545,7 +546,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
               </button>
             )}
           </div>
-          <DegreePad choices={q.choiceSet} mode={q.mode} onPick={pick} marks={marks} disabled={phase === 'context'} />
+          <DegreePad choices={q.choiceSet} mode={q.mode} tonicPc={q.tonicPc} onPick={pick} marks={marks} disabled={phase === 'context'} />
         </>
       )}
     </div>

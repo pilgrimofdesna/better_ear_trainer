@@ -1,5 +1,5 @@
 import { signal, effect } from '@preact/signals';
-import type { DegreePreset, Mode } from './music/theory';
+import type { DegreePreset, LabelKind, Mode } from './music/theory';
 import type { TimbreId } from './audio/timbres';
 import type { ContextKind } from './music/context';
 
@@ -17,7 +17,9 @@ export interface Settings {
   timbres: TimbreId[];
   detune: boolean; // ±50 cent continuous reference offset
   labels: 'number' | 'solfege' | 'both'; // unused since v0.2, kept so old saved settings still parse
-  subLabel: 'pc' | 'solfege' | 'none'; // small text under the degree name on the answer buttons
+  subLabel: 'pc' | 'solfege' | 'none'; // unused since v0.3 (see label / smallLabel)
+  label: LabelKind; // big name on the answer buttons and in feedback
+  smallLabel: LabelKind | 'none'; // small text under it
   autoNext: boolean;
   volume: number;
 }
@@ -31,6 +33,8 @@ export const DEFAULTS: Settings = {
   detune: true,
   labels: 'both',
   subLabel: 'pc',
+  label: 'degree',
+  smallLabel: 'movable0',
   autoNext: true,
   volume: 0.9,
 };

@@ -30,6 +30,40 @@ export const MODE_DEGREE_LABELS: Record<Mode, readonly string[]> = {
 
 export const degreeName = (semi: number, mode: Mode) => MODE_DEGREE_LABELS[mode][pc(semi)];
 
+// La-based minor solfège: the minor tonic is la (la ti do re mi fa sol), chromatic tones raised.
+const LA_MINOR = ['la', 'li', 'ti', 'do', 'di', 're', 'ri', 'mi', 'fa', 'fi', 'sol', 'si'] as const;
+
+/** How a degree is named on the buttons and in feedback. */
+export type LabelKind = 'degree' | 'do' | 'la' | 'note' | 'movable0' | 'fixed0';
+
+export const LABEL_KINDS: { id: LabelKind; name: string }[] = [
+  { id: 'degree', name: '1, 2, 3' },
+  { id: 'do', name: '이동도 (단조도 do가 으뜸음)' },
+  { id: 'la', name: '이동도, 단조는 la가 으뜸음' },
+  { id: 'note', name: '음이름 (C, D, E)' },
+  { id: 'movable0', name: '이동 0–11 (으뜸음 = 0)' },
+  { id: 'fixed0', name: '고정 0–11 (C = 0)' },
+];
+
+/** Name of the tone `semi` semitones above the tonic, in the chosen naming system. */
+export function labelFor(kind: LabelKind, semi: number, mode: Mode, tonicPc: number): string {
+  const p = pc(semi);
+  switch (kind) {
+    case 'degree':
+      return MODE_DEGREE_LABELS[mode][p];
+    case 'do':
+      return SOLFEGE[p];
+    case 'la':
+      return mode === 'minor' ? LA_MINOR[p] : SOLFEGE[p];
+    case 'note':
+      return NOTE_NAMES[pc(p + tonicPc)];
+    case 'movable0':
+      return String(p);
+    case 'fixed0':
+      return String(pc(p + tonicPc));
+  }
+}
+
 export const degreeLabel = (semi: number) => DEGREE_LABELS[pc(semi)];
 
 export const inScale = (semi: number, mode: Mode) => SCALES[mode].includes(pc(semi));
