@@ -5,7 +5,7 @@ import type { Mode } from '../music/theory';
 import type { TimbreId } from '../audio/timbres';
 import type { ContextKind } from '../music/context';
 
-export const APP_VERSION = '0.1.0';
+export const APP_VERSION = '0.2.0';
 
 export type Exercise = 'single' | 'dictation';
 export type Selection = 'random' | 'biased';
@@ -42,6 +42,7 @@ export interface TrialRec {
   noteDur: number; // seconds per note
   // ---- question ----
   target: number[]; // semitones from the tonic, with octave
+  targetHz?: number[]; // exact frequency of each target note (since v0.2; derivable from tonicHz + target)
   registerOctave: number; // octave of the (first) target relative to the tonic
   hinted?: number[]; // indices of target notes whose answer was shown as a hint (not scored)
   // ---- selection (hidden from the user) ----
@@ -79,6 +80,9 @@ export interface FollowupRec {
   postReplays: number;
   postContextReplays: number;
   tLeave: number;
+  // the user withdrew this trial ("방금 기록 지우기"): kept in the log and backups,
+  // left out of every analysis
+  voided?: boolean;
 }
 
 export interface ArchiveRec {
@@ -138,6 +142,10 @@ export const addTrial = (t: TrialRec) => db.trials.add(t);
 
 /** Resolves to the new follow-up's id. */
 export const addFollowup = (f: FollowupRec) => db.followups.add(f);
+
+/** Withdraw a trial without erasing it: an append-only marker that analyses honour. */
+export const voidTrial = (trialId: number, sessionId: number) =>
+  addFollowup({ trialId, sessionId, probes: 0, postReplays: 0, postContextReplays: 0, tLeave: Date.now(), voided: true });
 
 // Archive and import both read, work outside IndexedDB (gzip), then write.
 // Running them one at a time keeps two overlapping calls (a double tap, the
@@ -234,8 +242,12 @@ function chronological(trials: TrialRec[], sessions: SessionRec[]): TrialRec[] {
 }
 
 /** Every trial ever recorded, archived ones included, oldest first. */
-export async function allTrials(): Promise<TrialRec[]> {
-  return (await snapshot()).trials;
+/** Every trial the user has not withdrawn, archived ones included, oldest first. */
+export async function allTrials(opts: { includeVoided?: boolean } = {}): Promise<TrialRec[]> {
+  const { trials, followups } = await snapshot();
+  if (opts.includeVoided) return trials;
+  const voided = new Set(followups.filter((f) => f.voided).map((f) => f.trialId));
+  return trials.filter((t) => !voided.has(t.id!));
 }
 
 export async function allFollowups(): Promise<FollowupRec[]> {

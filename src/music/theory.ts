@@ -19,6 +19,17 @@ export const TONIC_TRIAD: Record<Mode, number[]> = {
 
 export const pc = (semi: number) => ((semi % 12) + 12) % 12;
 
+/**
+ * Degree names relative to the mode's own scale: in minor the scale tones are 1–7
+ * (so pitch class 3 is "3", not "♭3") and the other tones are raised (♯3, ♯6, ♯7) or ♭2/♯4.
+ */
+export const MODE_DEGREE_LABELS: Record<Mode, readonly string[]> = {
+  major: DEGREE_LABELS,
+  minor: ['1', '♭2', '2', '3', '♯3', '4', '♯4', '5', '6', '♯6', '7', '♯7'],
+};
+
+export const degreeName = (semi: number, mode: Mode) => MODE_DEGREE_LABELS[mode][pc(semi)];
+
 export const degreeLabel = (semi: number) => DEGREE_LABELS[pc(semi)];
 
 export const inScale = (semi: number, mode: Mode) => SCALES[mode].includes(pc(semi));

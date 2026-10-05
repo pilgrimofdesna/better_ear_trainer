@@ -16,7 +16,8 @@ export interface Settings {
   contextKinds: ContextKind[];
   timbres: TimbreId[];
   detune: boolean; // ±50 cent continuous reference offset
-  labels: 'number' | 'solfege' | 'both';
+  labels: 'number' | 'solfege' | 'both'; // unused since v0.2, kept so old saved settings still parse
+  subLabel: 'pc' | 'solfege' | 'none'; // small text under the degree name on the answer buttons
   autoNext: boolean;
   volume: number;
 }
@@ -29,6 +30,7 @@ export const DEFAULTS: Settings = {
   timbres: ['glass', 'epiano', 'musicbox', 'harp', 'flute'],
   detune: true,
   labels: 'both',
+  subLabel: 'pc',
   autoNext: true,
   volume: 0.9,
 };

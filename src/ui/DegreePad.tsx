@@ -1,21 +1,22 @@
-import { DEGREE_LABELS, SOLFEGE } from '../music/theory';
+import { type Mode, SCALES, SOLFEGE, degreeName } from '../music/theory';
 import { settings } from '../settings';
 
-// Column (in a 14-column grid) of each pitch class for the two-row keyboard layout.
-const KEY_COL: Record<number, { col: number; acc: boolean }> = {
-  0: { col: 1, acc: false },
-  2: { col: 3, acc: false },
-  4: { col: 5, acc: false },
-  5: { col: 7, acc: false },
-  7: { col: 9, acc: false },
-  9: { col: 11, acc: false },
-  11: { col: 13, acc: false },
-  1: { col: 2, acc: true },
-  3: { col: 4, acc: true },
-  6: { col: 8, acc: true },
-  8: { col: 10, acc: true },
-  10: { col: 12, acc: true },
-};
+/**
+ * Two-row layout that follows the current mode: the mode's seven scale tones on the bottom
+ * row, every other tone on the top row between the scale tone below it and the next one.
+ * Each button spans two columns, so a top-row button sits halfway between its neighbours.
+ */
+export function keyLayout(mode: Mode): Record<number, { col: number; acc: boolean }> {
+  const scale = SCALES[mode];
+  const out: Record<number, { col: number; acc: boolean }> = {};
+  scale.forEach((p, i) => (out[p] = { col: 2 * i + 1, acc: false }));
+  for (let p = 0; p < 12; p++) {
+    if (scale.includes(p)) continue;
+    const below = scale.filter((s) => s < p).length - 1; // index of the scale tone under it
+    out[p] = { col: 2 * below + 2, acc: true };
+  }
+  return out;
+}
 
 export interface PadMark {
   [pc: number]: 'good' | 'bad' | 'reveal' | undefined;
@@ -23,33 +24,37 @@ export interface PadMark {
 
 export function DegreePad({
   choices,
+  mode,
   onPick,
   marks = {},
   disabled = false,
 }: {
   choices: number[];
+  mode: Mode;
   onPick: (pc: number) => void;
   marks?: PadMark;
   disabled?: boolean; // dimmed and ignoring touches, e.g. while the context plays
 }) {
-  const lbl = settings.value.labels;
+  const sub = settings.value.subLabel ?? 'pc';
+  const layout = keyLayout(mode);
   const dim = { opacity: disabled ? '0.45' : '1', transition: 'opacity 0.15s' };
   const button = (p: number, style?: Record<string, string>) => (
     <button
       key={p}
-      class={`deg ${KEY_COL[p].acc ? 'acc' : ''} ${marks[p] ?? ''}`}
+      class={`deg ${layout[p].acc ? 'acc' : ''} ${marks[p] ?? ''}`}
       style={style}
       aria-disabled={disabled}
+      aria-label={`${degreeName(p, mode)}도`}
       onPointerDown={(e) => {
         e.preventDefault(); // fire on touch-down for accurate response times
         if (!disabled) onPick(p);
       }}
     >
-      {lbl !== 'solfege' && <span>{DEGREE_LABELS[p]}</span>}
-      {lbl !== 'number' && <span class={lbl === 'solfege' ? '' : 'sol'}>{SOLFEGE[p]}</span>}
+      <span>{degreeName(p, mode)}</span>
+      {sub !== 'none' && <span class="sol">{sub === 'pc' ? p : SOLFEGE[p]}</span>}
     </button>
   );
-  const hasAcc = choices.some((p) => KEY_COL[p].acc);
+  const hasAcc = choices.some((p) => layout[p].acc);
   if (choices.length <= 7 || !hasAcc) {
     return (
       <div class="pad flat" style={{ '--n': String(Math.min(choices.length, 7)), ...dim }}>
@@ -57,10 +62,12 @@ export function DegreePad({
       </div>
     );
   }
+  // minor's ♯7 sits past the last scale tone, so the grid may need one extra column
+  const cols = Math.max(14, ...choices.map((p) => layout[p].col + 1));
   return (
-    <div class="pad keys" style={dim}>
+    <div class="pad keys" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)`, ...dim }}>
       {choices.map((p) =>
-        button(p, { gridColumn: `${KEY_COL[p].col} / span 2`, gridRow: KEY_COL[p].acc ? '1' : '2' }),
+        button(p, { gridColumn: `${layout[p].col} / span 2`, gridRow: layout[p].acc ? '1' : '2' }),
       )}
     </div>
   );

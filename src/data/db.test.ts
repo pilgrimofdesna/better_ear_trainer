@@ -9,6 +9,7 @@ import {
   exportBackup,
   importBackup,
   storageInfo,
+  voidTrial,
   type SessionRec,
   type TrialRec,
 } from './db';
@@ -266,5 +267,21 @@ describe('followups', () => {
 
     expect((await importBackup(backup)).followups).toBe(0);
     expect(await allFollowups()).toHaveLength(1);
+  });
+});
+
+describe('withdrawn trials', () => {
+  it('are left out of allTrials but kept, exported and carried over by import', async () => {
+    await fill('pc', T0, 1, 5);
+    const [first] = await db.trials.orderBy('id').toArray();
+    await voidTrial(first.id!, first.sessionId);
+    expect(await allTrials()).toHaveLength(4);
+    expect(await allTrials({ includeVoided: true })).toHaveLength(5);
+    const backup = await exportBackup();
+    await db.delete();
+    await db.open();
+    await importBackup(backup);
+    expect(await allTrials()).toHaveLength(4);
+    expect(await allTrials({ includeVoided: true })).toHaveLength(5);
   });
 });

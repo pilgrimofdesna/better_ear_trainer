@@ -6,8 +6,8 @@ import { settings } from '../settings';
 import { audio, playEvents, stopAll, wallClock, setVolume } from '../audio/engine';
 import { buildQuestion, noPresentation, notePlayback, type Question, type Reference } from '../session/question';
 import { BlockSchedule, WeaknessModel, withHints } from '../adaptive/model';
-import { addFollowup, addTrial, allTrials, db, endSession, startSession, type Exercise, type TrialRec } from '../data/db';
-import { DEGREE_LABELS, pc, resolutionPath } from '../music/theory';
+import { addFollowup, addTrial, allTrials, db, endSession, startSession, voidTrial, type Exercise, type TrialRec } from '../data/db';
+import { SCALES, degreeName, freqOf, pc, resolutionPath } from '../music/theory';
 import type { NoteEvent, ContextPhrase } from '../music/context';
 
 // 'context': the question is playing but its target has not sounded yet (context, drone lead)
@@ -65,6 +65,8 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     postContextReplays: 0,
     lastSubmit: null as number | null,
     answered: null as { trialId: Promise<number>; sessionId: number } | null, // followup not written yet
+    history: [] as TrialRec[], // what the weakness model is built from (this exercise, not withdrawn)
+    last: null as { trialId: Promise<number>; sessionId: number; rec: TrialRec; voided: boolean } | null,
     timers: [] as number[], // phase timers of the current playback
     advance: 0, // pending auto-advance to the next question
     // handlers read these, not the render's copies, so a tap landing before a re-render
@@ -128,7 +130,8 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     r.current.sessionId = startSession(exercise, settings.value).catch(() => -1);
     Promise.all([allTrials(), db.sessions.toArray().catch(() => [])])
       .then(([ts, ss]) => {
-        r.current.model = new WeaknessModel(withHints(ts, ss).filter((t) => t.exercise === exercise));
+        r.current.history = withHints(ts, ss).filter((t) => t.exercise === exercise);
+        r.current.model = new WeaknessModel(r.current.history);
       })
       .catch(() => {})
       .finally(() => setPhase('ready'));
@@ -238,6 +241,7 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
       contextTimbre: question.contextTimbre,
       noteDur: question.noteDur,
       target: question.target,
+      targetHz: question.target.map((t) => freqOf(question.tonicHz, t)),
       registerOctave: question.registerOctave,
       selection: question.slot.selection,
       blockPos: question.slot.blockPos,
@@ -267,6 +271,8 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     const trialId = addTrial(rec);
     trialId.catch((e) => console.error('trial not saved', e));
     st.answered = { trialId, sessionId };
+    st.last = { trialId, sessionId, rec, voided: false };
+    st.history.push(rec);
     st.model.add(rec);
     st.lastSubmit = tSubmit;
     st.index++;
@@ -349,6 +355,51 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     play(q, withContext);
   }
 
+  /** Move on without answering: nothing is recorded for this question. */
+  function skip() {
+    const st = r.current;
+    if (!st.asking) return;
+    st.asking = false;
+    clearTimers();
+    stopAll();
+    next();
+  }
+
+  const [notice, setNotice] = useState('');
+  /** Withdraw the last answered trial (a mis-tap, an interruption). It stays in the log, marked. */
+  function withdrawLast() {
+    const st = r.current;
+    const last = st.last;
+    if (!last || last.voided) return;
+    last.voided = true;
+    last.trialId.then((id) => voidTrial(id, last.sessionId)).catch((e) => console.error('withdraw not saved', e));
+    st.history = st.history.filter((t) => t !== last.rec);
+    st.model = new WeaknessModel(st.history);
+    setTally((t) => ({ n: t.n - 1, ok: t.ok - (last.rec.allCorrect ? 1 : 0), streak: 0 }));
+    setNotice('방금 기록을 지웠어요. 통계와 출제에서 빠져요');
+    window.setTimeout(() => setNotice(''), 2500);
+  }
+
+  /** Dictation feedback: play the user's answer in the melody's own registers, or the melody. */
+  function playLine(which: 'answer' | 'target') {
+    const st = r.current;
+    if (!q || st.phase !== 'feedback') return;
+    cancelAdvance();
+    st.probes++;
+    const semis = q.target.map((t, i) => {
+      if (which === 'target') return t;
+      const d = (((st.input[i] - pc(t)) % 12) + 18) % 12 - 6; // answer placed nearest the real note
+      return t + d;
+    });
+    const events = semis.map((semi, i) => ({
+      semi,
+      t: i * q.noteDur,
+      dur: i === semis.length - 1 ? q.noteDur * 1.6 : q.noteDur * 0.92,
+      vel: 0.72,
+    }));
+    playEvents(events, q.tonicHz, q.timbre, { delay: 0.05 });
+  }
+
   async function quit() {
     clearTimers();
     cancelAdvance();
@@ -356,16 +407,17 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
     go('home');
   }
 
-  // PC keyboard: 1–7 = natural degrees, Shift+2/3/4/6/7 = ♭2 ♭3 ♯4 ♭6 ♭7,
-  // Space = replay, C = context, Backspace = undo, Enter = next / start
+  // PC keyboard: 1–7 = the mode's scale degrees, Shift+n = the tone just above degree n
+  // (major ♭2 ♭3 ♯4 ♭6 ♭7, minor ♭2 ♯3 ♯4 ♯6 ♯7), Space = replay, C = context,
+  // Backspace = undo, Enter = next / start
   const keys = useRef<(e: KeyboardEvent) => void>(() => {});
   keys.current = (e: KeyboardEvent) => {
-    const naturals = [0, 2, 4, 5, 7, 9, 11];
-    const accidentals: Record<number, number> = { 2: 1, 3: 3, 4: 6, 6: 8, 7: 10 };
+    const scale = SCALES[q?.mode ?? 'major'];
     const digit = /^Digit([1-7])$/.exec(e.code);
     if (digit) {
       const n = +digit[1];
-      const p = e.shiftKey ? accidentals[n] : naturals[n - 1];
+      const raised = scale[n - 1] + 1;
+      const p = e.shiftKey ? (raised < 12 && !scale.includes(raised) ? raised : undefined) : scale[n - 1];
       if (p !== undefined && q?.choiceSet.includes(p)) pick(p);
     } else if (e.code === 'Space') replay(false);
     else if (e.code === 'KeyC') replay(true);
@@ -395,6 +447,16 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
           <b>{tally.n}</b> 문제 · <b>{acc}%</b> · 연속 <b>{tally.streak}</b>
         </span>
       </div>
+      {(r.current.last && !r.current.last.voided) || notice ? (
+        <div class="spread small">
+          <span class="muted">{notice}</span>
+          {r.current.last && !r.current.last.voided && (
+            <button class="link" onClick={withdrawLast}>
+              방금 기록 지우기
+            </button>
+          )}
+        </div>
+      ) : null}
 
       <div class="stage">
         {phase === 'loading' || phase === 'ready' ? (
@@ -412,13 +474,13 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
         ) : exercise === 'single' ? (
           <>
             <div class={`orb ${hearing ? 'listening' : ''} ${result ? (result[0] ? 'good' : 'bad') : ''}`}>
-              {result && q ? DEGREE_LABELS[pc(q.target[0])] : hearing ? '♪' : '?'}
+              {result && q ? degreeName(q.target[0], q.mode) : hearing ? '♪' : '?'}
             </div>
             <div class="feedback">
               {result
                 ? result[0]
                   ? '정답'
-                  : `${DEGREE_LABELS[pc(q!.target[0])]}도였어요. 버튼을 눌러 비교해 보세요`
+                  : `${degreeName(q!.target[0], q!.mode)}도였어요. 버튼을 눌러 비교해 보세요`
                 : hearing
                   ? '듣는 중'
                   : '몇 도일까요?'}
@@ -440,8 +502,8 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
                     }}
                   >
                     <div>
-                      {filled ? DEGREE_LABELS[input[i]] : i === 0 && settings.value.dictation.firstHint ? <span class="muted">{DEGREE_LABELS[pc(t)]}</span> : ''}
-                      {result && !result[i] && <span class="fix">{DEGREE_LABELS[pc(t)]}</span>}
+                      {filled ? degreeName(input[i], q!.mode) : i === 0 && settings.value.dictation.firstHint ? <span class="muted">{degreeName(t, q!.mode)}</span> : ''}
+                      {result && !result[i] && <span class="fix">{degreeName(t, q!.mode)}</span>}
                     </div>
                   </div>
                 );
@@ -456,6 +518,12 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
                   ? '듣는 중'
                   : '순서대로 입력하세요'}
             </div>
+            {result && !result.every(Boolean) && (
+              <div class="row">
+                <button onClick={() => playLine('answer')}>내 답 듣기</button>
+                <button onClick={() => playLine('target')}>정답 듣기</button>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -470,13 +538,14 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
                 지우기
               </button>
             )}
+            {phase !== 'feedback' && <button onClick={skip}>건너뛰기</button>}
             {phase === 'feedback' && (
               <button class="primary" onClick={() => next()}>
                 다음
               </button>
             )}
           </div>
-          <DegreePad choices={q.choiceSet} onPick={pick} marks={marks} disabled={phase === 'context'} />
+          <DegreePad choices={q.choiceSet} mode={q.mode} onPick={pick} marks={marks} disabled={phase === 'context'} />
         </>
       )}
     </div>

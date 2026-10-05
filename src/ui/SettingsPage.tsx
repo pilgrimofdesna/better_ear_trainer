@@ -186,15 +186,15 @@ export function SettingsPage() {
       <div class="card">
         <h2>화면과 진행</h2>
         <div class="row">
-          <span class="muted small">버튼 표시</span>
+          <span class="muted small">버튼 아래 작은 글씨</span>
           {(
             [
-              ['number', '숫자'],
+              ['pc', '숫자 0–11'],
               ['solfege', '계이름'],
-              ['both', '둘 다'],
+              ['none', '없음'],
             ] as const
           ).map(([id, name]) => (
-            <button class={`chip ${s.labels === id ? 'on' : ''}`} onClick={() => patch((x) => (x.labels = id))}>
+            <button class={`chip ${(s.subLabel ?? 'pc') === id ? 'on' : ''}`} onClick={() => patch((x) => (x.subLabel = id))}>
               {name}
             </button>
           ))}
