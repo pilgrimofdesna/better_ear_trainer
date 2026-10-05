@@ -33,3 +33,12 @@ describe('naming systems', () => {
     expect(labelFor('fixed0', 3, 'minor', 9)).toBe('0');
   });
 });
+
+describe('note spelling', () => {
+  it('spells from the key', () => {
+    const scale = (mode: 'major' | 'minor', t: number, pcs: number[]) => pcs.map((p) => labelFor('note', p, mode, t)).join(' ');
+    expect(scale('major', 6, [0, 2, 4, 5, 7, 9, 11])).toBe('F♯ G♯ A♯ B C♯ D♯ E♯');
+    expect(scale('major', 3, [0, 2, 4, 5, 7, 9, 11])).toBe('E♭ F G A♭ B♭ C D');
+    expect(scale('minor', 2, [0, 2, 3, 5, 7, 8, 10, 11])).toBe('D E F G A B♭ C C♯');
+  });
+});

@@ -45,6 +45,23 @@ export const LABEL_KINDS: { id: LabelKind; name: string }[] = [
   { id: 'fixed0', name: '고정 0–11 (C = 0)' },
 ];
 
+const LETTERS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
+const LETTER_PC = [0, 2, 4, 5, 7, 9, 11];
+// conventional tonic spellings (fewest accidentals in the key signature)
+const TONIC_NAME: Record<Mode, string[]> = {
+  major: ['C', 'D♭', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'],
+  minor: ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'B♭', 'B'],
+};
+
+/** Letter name spelt from the degree, so A minor's raised 7th is G♯ rather than A♭. */
+function spellNote(p: number, mode: Mode, tonicPc: number): string {
+  const tonic = TONIC_NAME[mode][pc(tonicPc)];
+  const step = +MODE_DEGREE_LABELS[mode][p].replace(/[♭♯]/g, '') - 1;
+  const letter = (LETTERS.indexOf(tonic[0]) + step) % 7;
+  const acc = ((pc(tonicPc + p) - LETTER_PC[letter] + 18) % 12) - 6; // -2..2
+  return LETTERS[letter] + (['𝄫', '♭', '', '♯', '𝄪'][acc + 2] ?? '');
+}
+
 /** Name of the tone `semi` semitones above the tonic, in the chosen naming system. */
 export function labelFor(kind: LabelKind, semi: number, mode: Mode, tonicPc: number): string {
   const p = pc(semi);
@@ -56,7 +73,7 @@ export function labelFor(kind: LabelKind, semi: number, mode: Mode, tonicPc: num
     case 'la':
       return mode === 'minor' ? LA_MINOR[p] : SOLFEGE[p];
     case 'note':
-      return NOTE_NAMES[pc(p + tonicPc)];
+      return spellNote(p, mode, tonicPc);
     case 'movable0':
       return String(p);
     case 'fixed0':
