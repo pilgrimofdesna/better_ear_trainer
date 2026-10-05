@@ -124,7 +124,8 @@ export function Trainer({ exercise }: { exercise: Exercise }) {
 
   useEffect(() => {
     setVolume(settings.value.volume);
-    r.current.sessionId = startSession(exercise, settings.value);
+    // storage can be blocked (private mode, sandboxed frame); training still works without it
+    r.current.sessionId = startSession(exercise, settings.value).catch(() => -1);
     Promise.all([allTrials(), db.sessions.toArray().catch(() => [])])
       .then(([ts, ss]) => {
         r.current.model = new WeaknessModel(withHints(ts, ss).filter((t) => t.exercise === exercise));
